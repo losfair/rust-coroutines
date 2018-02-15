@@ -135,3 +135,14 @@ void scheduler_run(struct scheduler *sch) {
         }
     }
 }
+
+void start_coroutine(
+    struct scheduler *sch,
+    size_t stack_size,
+    coroutine_entry entry,
+    void *user_data
+) {
+    struct coroutine *crt = malloc(sizeof(struct coroutine));
+    coroutine_init(crt, stack_size, entry, user_data);
+    scheduler_take_coroutine(sch, crt);
+}

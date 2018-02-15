@@ -42,4 +42,11 @@ void scheduler_destroy(struct scheduler *sch);
 void scheduler_take_coroutine(struct scheduler *sch, struct coroutine *crt);
 void scheduler_run(struct scheduler *sch);
 
+void start_coroutine(
+    struct scheduler *sch,
+    size_t stack_size,
+    coroutine_entry entry,
+    void *user_data
+);
+
 #endif
