@@ -53,96 +53,147 @@ int coroutine_run(
     return crt -> terminated;
 }
 
-// To be used in the circular list.
-struct coroutine_node {
-    struct coroutine *crt;
-    struct coroutine_node *prev;
-    struct coroutine_node *next;
-};
-
-static void node_init(struct coroutine_node *node, struct coroutine_node *prev, struct coroutine_node *next) {
+void task_node_init(struct task_node *node) {
     node -> crt = NULL;
-    node -> prev = prev;
-    node -> next = next;
-    prev -> next = node;
-    next -> prev = node;
-}
-
-static void node_detach(struct coroutine_node *node) {
-    node -> prev -> next = node -> next;
-    node -> next -> prev = node -> prev;
     node -> prev = NULL;
     node -> next = NULL;
 }
 
-static void node_destroy(struct coroutine_node *node) {
-    assert(node -> prev == NULL && node -> next == NULL); // detached
-    coroutine_destroy(node -> crt);
-    free(node -> crt);
-    node -> crt = NULL;
+void task_node_destroy(struct task_node *node) {
+    if(node -> crt) {
+        coroutine_destroy(node -> crt);
+        node -> crt = NULL;
+    }
+    node -> prev = NULL;
+    node -> next = NULL;
 }
 
-void scheduler_init(struct scheduler *sch) {
-    sch -> head = malloc(sizeof(struct coroutine_node));
-    node_init(sch -> head, sch -> head, sch -> head);
+void task_pool_init(struct task_pool *pool, int concurrent) {
+    pool -> head = (struct task_node *) malloc(sizeof(struct task_node));
+    task_node_init(pool -> head);
+    pool -> tail = pool -> head;
+    pool -> concurrent = concurrent;
+    sem_init(&pool -> elem_notify, 0, 0);
+    pthread_mutex_init(&pool -> lock, NULL);
 }
 
-void scheduler_destroy(struct scheduler *sch) {
-    struct coroutine_node *current, *next;
+void task_pool_destroy(struct task_pool *pool) {
+    struct task_node *current, *next;
 
-    current = sch -> head -> next;
-    while(current != sch -> head) {
+    current = pool -> head;
+    assert(current -> prev == NULL);
+
+    while(current) {
         next = current -> next;
-        coroutine_destroy(current -> crt);
+        task_node_destroy(current);
         free(current);
         current = next;
     }
-    free(sch -> head);
+
+    pool -> head = NULL;
+    pool -> tail = NULL;
+    sem_destroy(&pool -> elem_notify);
+    pthread_mutex_destroy(&pool -> lock);
 }
 
-void scheduler_take_coroutine(struct scheduler *sch, struct coroutine *crt) {
-    struct coroutine_node *node;
+void task_pool_debug_print(struct task_pool *pool) {
+    struct task_node *current;
 
-    node = malloc(sizeof(struct coroutine_node));
-    node_init(node, sch -> head -> prev, sch -> head);
-    node -> crt = crt;
+    current = pool -> head;
+    assert(current -> prev == NULL);
+
+    printf("----- BEGIN -----\n");
+    while(current) {
+        printf("current=%p crt=%p prev=%p next=%p\n", current, current -> crt, current -> prev, current -> next);
+        current = current -> next;
+    }
+    printf("----- END -----\n");
+}
+
+void task_pool_push_node(struct task_pool *pool, struct task_node *node) {
+    if(pool -> concurrent) pthread_mutex_lock(&pool -> lock);
+
+    assert(pool -> tail -> next == NULL);
+    assert(node -> prev == NULL && node -> next == NULL);
+
+    pool -> tail -> next = node;
+    node -> prev = pool -> tail;
+    pool -> tail = node;
+
+    if(pool -> concurrent) pthread_mutex_unlock(&pool -> lock);
+    sem_post(&pool -> elem_notify);
+}
+
+struct task_node * task_pool_pop_node(struct task_pool *pool) {
+    struct task_node *ret;
+
+    sem_wait(&pool -> elem_notify);
+    if(pool -> concurrent) pthread_mutex_lock(&pool -> lock);
+
+    assert(pool -> head -> prev == NULL);
+    assert(pool -> head -> next != NULL);
+    ret = pool -> head -> next;
+    pool -> head -> next = ret -> next;
+    if(ret -> next) ret -> next -> prev = pool -> head;
+    ret -> prev = NULL;
+    ret -> next = NULL;
+
+    if(ret == pool -> tail) {
+        pool -> tail = pool -> head;
+    }
+
+    if(pool -> concurrent) pthread_mutex_unlock(&pool -> lock);
+    return ret;
+}
+
+void scheduler_init(struct scheduler *sch, struct task_pool *pool) {
+    sch -> pool = pool;
+}
+
+void scheduler_destroy(struct scheduler *sch) {
+
 }
 
 void scheduler_run(struct scheduler *sch) {
-    struct coroutine_node *current, *next;
+    struct task_node *current, *pinned;
     int terminated;
 
-    current = NULL;
-    next = sch -> head;
+    pinned = NULL;
 
     while(1) {
-        current = next;
-        next = current -> next; // `current` may be modified
-        if(current == next) {
-            if(current == sch -> head) break;
-            else {
-                fprintf(stderr, "ERROR: Internal data corrupted\n");
-                abort();
-            }
+        if(pinned) {
+            current = pinned;
+        } else {
+            current = task_pool_pop_node(sch -> pool);
+            pinned = current;
+            //printf("Pinning %p to scheduler %p\n", current, sch);
         }
-        if(current == sch -> head) continue;
+
+        //printf("Scheduler %p got task\n", sch);
 
         terminated = coroutine_run(current -> crt);
         if(terminated) {
-            node_detach(current);
-            node_destroy(current);
+            task_node_destroy(current);
             free(current);
+            pinned = NULL;
+        } else {
+            //task_pool_push_node(sch -> pool, current);
         }
     }
 }
 
 void start_coroutine(
-    struct scheduler *sch,
+    struct task_pool *pool,
     size_t stack_size,
     coroutine_entry entry,
     void *user_data
 ) {
     struct coroutine *crt = malloc(sizeof(struct coroutine));
+    struct task_node *node = malloc(sizeof(struct task_node));
+
     coroutine_init(crt, stack_size, entry, user_data);
-    scheduler_take_coroutine(sch, crt);
+    task_node_init(node);
+
+    node -> crt = crt;
+    task_pool_push_node(pool, node);
 }
