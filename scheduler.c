@@ -10,6 +10,38 @@ void coroutine_yield(
     yield_now(&crt -> local_rsp, &crt -> caller_rsp);
 }
 
+void coroutine_async_enter(
+    struct coroutine *crt,
+    coroutine_async_entry entry,
+    void *user_data
+) {
+    assert(crt -> async_detached == 0);
+    crt -> async_detached = 1;
+
+    crt -> async_target = entry;
+    crt -> async_user_data = user_data;
+
+    coroutine_yield(crt);
+}
+
+void coroutine_async_exit(
+    struct coroutine *crt
+) {
+    struct task_node *node;
+
+    assert(crt -> async_detached == 1);
+    crt -> async_detached = 0;
+
+    crt -> async_target = NULL;
+    crt -> async_user_data = NULL;
+
+    node = malloc(sizeof(struct task_node));
+    task_node_init(node);
+    node -> crt = crt;
+    
+    task_pool_push_node(crt -> pool, node);
+}
+
 static void coroutine_target_init(void *raw_crt) {
     struct coroutine *crt = (struct coroutine *) raw_crt;
     coroutine_yield(crt);
@@ -21,6 +53,7 @@ static void coroutine_target_init(void *raw_crt) {
 void coroutine_init(
     struct coroutine *crt,
     size_t stack_size,
+    struct task_pool *pool,
     coroutine_entry entry,
     void *user_data
 ) {
@@ -29,8 +62,15 @@ void coroutine_init(
     crt -> local_rsp = (long) crt -> stack_end;
     crt -> caller_rsp = 0;
     crt -> terminated = 0;
+
+    crt -> async_detached = 0;
+    crt -> async_target = NULL;
+    crt -> async_user_data = NULL;
+
+    crt -> pool = pool;
     crt -> entry = entry;
     crt -> user_data = user_data;
+
     init_co_stack(&crt -> caller_rsp, &crt -> local_rsp, coroutine_target_init, (void *) crt);
 }
 
@@ -42,7 +82,7 @@ void coroutine_destroy(
     }
 }
 
-int coroutine_run(
+void coroutine_run(
     struct coroutine *crt
 ) {
     if(crt -> terminated) {
@@ -50,7 +90,6 @@ int coroutine_run(
         abort();
     }
     yield_now(&crt -> caller_rsp, &crt -> local_rsp);
-    return crt -> terminated;
 }
 
 void task_node_init(struct task_node *node) {
@@ -156,7 +195,7 @@ void scheduler_destroy(struct scheduler *sch) {
 
 void scheduler_run(struct scheduler *sch) {
     struct task_node *current, *pinned;
-    int terminated;
+    struct coroutine *target_crt;
 
     pinned = NULL;
 
@@ -171,11 +210,18 @@ void scheduler_run(struct scheduler *sch) {
 
         //printf("Scheduler %p got task\n", sch);
 
-        terminated = coroutine_run(current -> crt);
-        if(terminated) {
+        coroutine_run(current -> crt);
+        if(current -> crt -> terminated) {
             task_node_destroy(current);
             free(current);
             pinned = NULL;
+        } else if(current -> crt -> async_detached) {
+            target_crt = current -> crt;
+            current -> crt = NULL;
+            task_node_destroy(current);
+            free(current);
+            pinned = NULL;
+            target_crt -> async_target(target_crt, target_crt -> async_user_data);
         } else {
             //task_pool_push_node(sch -> pool, current);
         }
@@ -191,7 +237,7 @@ void start_coroutine(
     struct coroutine *crt = malloc(sizeof(struct coroutine));
     struct task_node *node = malloc(sizeof(struct task_node));
 
-    coroutine_init(crt, stack_size, entry, user_data);
+    coroutine_init(crt, stack_size, pool, entry, user_data);
     task_node_init(node);
 
     node -> crt = crt;

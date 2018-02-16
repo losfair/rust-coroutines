@@ -10,8 +10,10 @@ extern "C" {
 #endif
 
 struct coroutine;
+struct task_pool;
 
 typedef void (*coroutine_entry)(struct coroutine *crt);
+typedef void (*coroutine_async_entry)(struct coroutine *crt, void *user_data);
 
 struct coroutine {
     char *stack_begin;
@@ -19,6 +21,14 @@ struct coroutine {
     long local_rsp;
     long caller_rsp;
     int terminated;
+
+    // async_detached == 1 && async_target != NULL && async_user_data is valid
+    // OR async_detached == 0 && async_target == NULL && async_user_data == NULL
+    int async_detached;
+    coroutine_async_entry async_target;
+    void *async_user_data;
+
+    struct task_pool *pool;
 
     coroutine_entry entry;
     void *user_data;
@@ -31,11 +41,22 @@ void coroutine_yield(
 void coroutine_init(
     struct coroutine *crt,
     size_t stack_size,
+    struct task_pool *pool,
     coroutine_entry entry,
     void *user_data
 );
 
-int coroutine_run(
+void coroutine_run(
+    struct coroutine *crt
+);
+
+void coroutine_async_enter(
+    struct coroutine *crt,
+    coroutine_async_entry entry,
+    void *user_data
+);
+
+void coroutine_async_exit(
     struct coroutine *crt
 );
 
