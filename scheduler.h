@@ -98,6 +98,8 @@ void start_coroutine(
     void *user_data
 );
 
+struct coroutine * current_coroutine();
+
 #ifdef __cplusplus
 }
 #endif

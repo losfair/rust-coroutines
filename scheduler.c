@@ -4,6 +4,8 @@
 
 #include "scheduler.h"
 
+static __thread struct coroutine *current_co = NULL;
+
 void coroutine_yield(
     struct coroutine *crt
 ) {
@@ -193,11 +195,13 @@ void scheduler_destroy(struct scheduler *sch) {
 
 }
 
+// TODO: Graceful cleanup (?)
 void scheduler_run(struct scheduler *sch) {
     struct task_node *current, *pinned;
     struct coroutine *target_crt;
 
     pinned = NULL;
+    assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
         if(pinned) {
@@ -210,7 +214,10 @@ void scheduler_run(struct scheduler *sch) {
 
         //printf("Scheduler %p got task\n", sch);
 
+        current_co = current -> crt;
         coroutine_run(current -> crt);
+        current_co = NULL;
+
         if(current -> crt -> terminated) {
             task_node_destroy(current);
             free(current);
@@ -242,4 +249,8 @@ void start_coroutine(
 
     node -> crt = crt;
     task_pool_push_node(pool, node);
+}
+
+struct coroutine * current_coroutine() {
+    return current_co;
 }
