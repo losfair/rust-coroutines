@@ -132,6 +132,7 @@ void task_node_init(struct task_node *node) {
 void task_node_destroy(struct task_node *node) {
     if(node -> crt) {
         coroutine_destroy(node -> crt);
+        free(node -> crt);
         node -> crt = NULL;
     }
     node -> prev = NULL;
