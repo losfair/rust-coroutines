@@ -12,7 +12,7 @@ void coroutine_yield(
     yield_now(&crt -> local_rsp, &crt -> caller_rsp);
 }
 
-void coroutine_async_enter(
+void * coroutine_async_enter(
     struct coroutine *crt,
     coroutine_async_entry entry,
     void *user_data
@@ -23,11 +23,19 @@ void coroutine_async_enter(
     crt -> async_target = entry;
     crt -> async_user_data = user_data;
 
+    assert(crt -> async_return_data == NULL);
+
     coroutine_yield(crt);
+
+    void *return_data = crt -> async_return_data;
+    crt -> async_return_data = NULL;
+
+    return return_data;
 }
 
 void coroutine_async_exit(
-    struct coroutine *crt
+    struct coroutine *crt,
+    void *data
 ) {
     struct task_node *node;
 
@@ -36,11 +44,12 @@ void coroutine_async_exit(
 
     crt -> async_target = NULL;
     crt -> async_user_data = NULL;
+    crt -> async_return_data = data;
 
     node = malloc(sizeof(struct task_node));
     task_node_init(node);
     node -> crt = crt;
-    
+
     task_pool_push_node(crt -> pool, node);
 }
 
@@ -70,6 +79,7 @@ void coroutine_init(
     crt -> async_detached = 0;
     crt -> async_target = NULL;
     crt -> async_user_data = NULL;
+    crt -> async_return_data = NULL;
 
     pthread_mutex_lock(&pool -> cls_destructors_lock);
 

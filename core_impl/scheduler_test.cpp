@@ -92,7 +92,7 @@ void fib_n(struct coroutine *crt) {
 void _async_target(struct coroutine *crt, void *user_data) {
     int *v = (int *) user_data;
     (*v)++;
-    coroutine_async_exit(crt);
+    coroutine_async_exit(crt, NULL);
 }
 
 void async_calls(struct coroutine *crt) {

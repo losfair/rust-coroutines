@@ -39,6 +39,7 @@ struct coroutine {
     int async_detached;
     coroutine_async_entry async_target;
     void *async_user_data;
+    void *async_return_data;
 
     struct task_pool *pool;
     struct coroutine_local_storage cls;
@@ -63,14 +64,15 @@ void coroutine_run(
     struct coroutine *crt
 );
 
-void coroutine_async_enter(
+void * coroutine_async_enter(
     struct coroutine *crt,
     coroutine_async_entry entry,
     void *user_data
 );
 
 void coroutine_async_exit(
-    struct coroutine *crt
+    struct coroutine *crt,
+    void *data
 );
 
 struct task_node {

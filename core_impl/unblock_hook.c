@@ -11,6 +11,8 @@
 #include <sys/timerfd.h>
 #include "scheduler.h"
 
+#define MAX_N_EPOLL_EVENTS 16
+
 static struct task_pool global_pool;
 static int epoll_fd;
 
@@ -47,16 +49,19 @@ static void * _run_scheduler(void *raw_sch) {
 }
 
 static void * _do_poll(void *unused) {
+    int i;
     int n_ready;
-    struct epoll_event ev;
+    struct epoll_event ev[MAX_N_EPOLL_EVENTS], *current_ev;
+    struct coroutine *crt;
 
     while(1) {
-        n_ready = epoll_wait(epoll_fd, &ev, 1, -1);
-        if(n_ready == 0) continue;
-        assert(n_ready == 1);
-
-        struct coroutine *crt = (struct coroutine *) ev.data.ptr;
-        coroutine_async_exit(crt);
+        n_ready = epoll_wait(epoll_fd, ev, MAX_N_EPOLL_EVENTS, -1);
+        for(i = 0; i < n_ready; i++) {
+            crt = (struct coroutine *) ev[i].data.ptr;
+            current_ev = malloc(sizeof(struct epoll_event));
+            memcpy(current_ev, &ev[i], sizeof(struct epoll_event));
+            coroutine_async_exit(crt, (void *) current_ev);
+        }
     }
 }
 
@@ -169,6 +174,7 @@ int nanosleep(
 ) {
     struct coroutine *co;
     struct nanosleep_context context;
+    struct epoll_event *ev;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -178,7 +184,9 @@ int nanosleep(
     context.requested_time = requested_time;
     context.tfd = -1;
 
-    coroutine_async_enter(co, _enter_nanosleep, (void *) &context);
+    ev = (struct epoll_event *) coroutine_async_enter(co, _enter_nanosleep, (void *) &context);
+    free(ev);
+
     realFclose(context.tfd);
     return 0;
 }
