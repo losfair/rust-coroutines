@@ -8,7 +8,10 @@
 #include <pthread.h>
 #include <sys/epoll.h>
 #include <assert.h>
+#include <sys/types.h>
 #include <sys/timerfd.h>
+#include <sys/socket.h>
+#include <errno.h>
 #include "scheduler.h"
 
 #define MAX_N_EPOLL_EVENTS 16
@@ -41,6 +44,11 @@ static int (*realFpthread_key_create)(pthread_key_t *__key, void (*__destructor)
 static int (*realFpthread_key_delete)(pthread_key_t __key);
 static void * (*realFpthread_getspecific)(pthread_key_t __key);
 static int (*realFpthread_setspecific)(pthread_key_t __key, const void *__value);
+static int (*realFsocket)(int domain, int type, int protocol);
+static int (*realFbind)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+static int (*realFlisten)(int sockfd, int backlog);
+static int (*realFaccept)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+static int (*realFaccept4)(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags);
 
 static void * _run_scheduler(void *raw_sch) {
     struct scheduler *sch = (struct scheduler *) raw_sch;
@@ -48,19 +56,29 @@ static void * _run_scheduler(void *raw_sch) {
     return NULL;
 }
 
+struct co_poll_context {
+    struct coroutine *co;
+    struct epoll_event ev;
+};
+
 static void * _do_poll(void *unused) {
     int i;
     int n_ready;
-    struct epoll_event ev[MAX_N_EPOLL_EVENTS], *current_ev;
-    struct coroutine *crt;
+    struct epoll_event ev[MAX_N_EPOLL_EVENTS];
+    struct co_poll_context *req;
+    struct coroutine *co;
 
     while(1) {
         n_ready = epoll_wait(epoll_fd, ev, MAX_N_EPOLL_EVENTS, -1);
         for(i = 0; i < n_ready; i++) {
-            crt = (struct coroutine *) ev[i].data.ptr;
-            current_ev = malloc(sizeof(struct epoll_event));
-            memcpy(current_ev, &ev[i], sizeof(struct epoll_event));
-            coroutine_async_exit(crt, (void *) current_ev);
+            req = ev[i].data.ptr;
+            if(!req -> co) {
+                continue;
+            }
+            co = req -> co;
+            req -> co = NULL; // `req` should be released by the requesting coroutine
+            memcpy(&req -> ev, &ev[i], sizeof(struct epoll_event));
+            coroutine_async_exit(co, req);
         }
     }
 }
@@ -88,6 +106,11 @@ static void __attribute__((constructor)) __init() {
     realFpthread_key_delete = dlsym(RTLD_NEXT, "pthread_key_delete");
     realFpthread_getspecific = dlsym(RTLD_NEXT, "pthread_getspecific");
     realFpthread_setspecific = dlsym(RTLD_NEXT, "pthread_setspecific");
+    realFsocket = dlsym(RTLD_NEXT, "socket");
+    realFbind = dlsym(RTLD_NEXT, "bind");
+    realFlisten = dlsym(RTLD_NEXT, "listen");
+    realFaccept = dlsym(RTLD_NEXT, "accept");
+    realFaccept4 = dlsym(RTLD_NEXT, "accept4");
 
     task_pool_init(&global_pool, 1);
     num_cpus = get_nprocs();
@@ -158,8 +181,12 @@ static void _enter_nanosleep(struct coroutine *co, void *raw_context) {
         timerfd_settime(context -> tfd, 0, &ts, NULL) >= 0
     );
 
+    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
+    pc -> co = co;
+
     ev.events = EPOLLIN | EPOLLET;
-    ev.data.ptr = (void *) co;
+    ev.data.ptr = pc;
+
     assert(epoll_ctl(
         epoll_fd,
         EPOLL_CTL_ADD,
@@ -174,7 +201,7 @@ int nanosleep(
 ) {
     struct coroutine *co;
     struct nanosleep_context context;
-    struct epoll_event *ev;
+    struct co_poll_context *ctx;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -184,11 +211,106 @@ int nanosleep(
     context.requested_time = requested_time;
     context.tfd = -1;
 
-    ev = (struct epoll_event *) coroutine_async_enter(co, _enter_nanosleep, (void *) &context);
-    free(ev);
+    ctx = coroutine_async_enter(co, _enter_nanosleep, (void *) &context);
+    free(ctx);
 
+    assert(epoll_ctl(
+        epoll_fd,
+        EPOLL_CTL_DEL,
+        context.tfd,
+        NULL
+    ) >= 0);
     realFclose(context.tfd);
     return 0;
+}
+
+int socket(int domain, int type, int protocol) {
+    struct coroutine *co;
+    int fd;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFsocket(domain, type, protocol);
+    }
+
+    type |= SOCK_NONBLOCK;
+    fd = realFsocket(domain, type, protocol);
+    return fd;
+}
+
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    return realFbind(sockfd, addr, addrlen);
+}
+
+int listen(int sockfd, int backlog) {
+    return realFlisten(sockfd, backlog);
+}
+
+struct accept4_context {
+    int sockfd;
+    struct sockaddr *addr;
+    socklen_t *addrlen;
+    int flags;
+};
+
+static void _enter_accept4(struct coroutine *co, void *raw_context) {
+    int status;
+    struct epoll_event ev;
+    struct accept4_context *context = raw_context;
+
+    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
+    pc -> co = co;
+
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = pc;
+
+    status = epoll_ctl(
+        epoll_fd,
+        EPOLL_CTL_ADD,
+        context -> sockfd,
+        &ev
+    );
+    assert(status >= 0);
+}
+
+int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
+    struct coroutine *co;
+    int status;
+    int connfd;
+    struct accept4_context context;
+    struct co_poll_context *pc;
+    struct epoll_event ev_builder;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFaccept(sockfd, addr, addrlen);
+    }
+
+    context.sockfd = sockfd;
+    context.addr = addr;
+    context.addrlen = addrlen;
+    context.flags = flags | SOCK_NONBLOCK;
+
+    status = realFaccept4(context.sockfd, context.addr, context.addrlen, context.flags);
+    while(status < 0) {
+        if(errno != EAGAIN && errno != EWOULDBLOCK) {
+            return status;
+        }
+
+        pc = coroutine_async_enter(co, _enter_accept4, &context);
+        free(pc);
+
+        assert(epoll_ctl(
+            epoll_fd,
+            EPOLL_CTL_DEL,
+            sockfd,
+            NULL
+        ) >= 0);
+
+        status = realFaccept4(context.sockfd, context.addr, context.addrlen, context.flags);
+    }
+
+    return status;
 }
 
 void launch_co(
@@ -203,77 +325,3 @@ void * extract_co_user_data(
 ) {
     return co -> user_data;
 }
-
-/*
-struct fake_thread_info {
-    void *(*start_routine)(void *);
-    void *arg;
-};
-
-void fake_thread_entry(struct coroutine *co) {
-    struct fake_thread_info *info = (struct fake_thread_info *) co -> user_data;
-    info -> start_routine(info -> arg);
-    free(info);
-}
-
-int pthread_create(
-    pthread_t *thread,
-    const pthread_attr_t *attr,
-    void *(*start_routine)(void *),
-    void *arg
-) {
-    struct fake_thread_info *info = (struct fake_thread_info *) malloc(sizeof(struct fake_thread_info));
-    info -> start_routine = start_routine;
-    info -> arg = arg;
-    start_coroutine(&global_pool, 8192, fake_thread_entry, (void *) info);
-    return 0;
-}
-
-int pthread_cancel(pthread_t thread) {
-    printf("pthread_cancel\n");
-    abort();
-}
-
-int pthread_detach(pthread_t thread) {
-    //printf("pthread_detach\n");
-    //abort();
-    return 0;
-}
-
-int pthread_equal(pthread_t left, pthread_t right) {
-    printf("pthread_equal\n");
-    abort();
-}
-
-int pthread_getschedparam(pthread_t thread, int *p1, struct sched_param *p2) {
-    printf("pthread_getschedparam\n");
-    abort();
-}
-
-int pthread_join(pthread_t thread, void **p1) {
-    printf("pthread_join\n");
-    abort();
-}
-
-int pthread_setschedparam(pthread_t thread, int p1, const struct sched_param *p2) {
-    //printf("pthread_setschedparam\n");
-    abort();
-}
-
-// FIXME: the scheduler itself uses TLS. UB here?
-int pthread_key_create(pthread_key_t *key, void (*destructor) (void *)) {
-    abort();
-
-    int id = task_pool_add_cls_slot(&global_pool, destructor);
-    *key = (unsigned int) id;
-    return 0;
-}
-
-int pthread_key_delete(pthread_key_t key) {
-    abort();
-}
-
-void * pthread_getspecific(pthread_key_t key) {
-    abort();
-}
-*/
