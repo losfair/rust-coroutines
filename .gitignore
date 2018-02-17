@@ -1,3 +1,4 @@
-*.o
-*.so
-*_test
+
+target/
+**/*.rs.bk
+Cargo.lock
