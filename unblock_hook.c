@@ -35,6 +35,10 @@ static int (*realFpthread_getschedparam)(pthread_t, int *, struct sched_param *)
 static int (*realFpthread_join)(pthread_t, void **);
 static pthread_t (*realFpthread_self)();
 static int (*realFpthread_setschedparam)(pthread_t, int, const struct sched_param *);
+static int (*realFpthread_key_create)(pthread_key_t *__key, void (*__destructor) (void *));
+static int (*realFpthread_key_delete)(pthread_key_t __key);
+static void * (*realFpthread_getspecific)(pthread_key_t __key);
+static int (*realFpthread_setspecific)(pthread_key_t __key, const void *__value);
 
 static void * _run_scheduler(void *raw_sch) {
     struct scheduler *sch = (struct scheduler *) raw_sch;
@@ -75,6 +79,10 @@ static void __attribute__((constructor)) __init() {
     realFpthread_join = dlsym(RTLD_NEXT, "pthread_join");
     realFpthread_self = dlsym(RTLD_NEXT, "pthread_self");
     realFpthread_setschedparam = dlsym(RTLD_NEXT, "pthread_setschedparam");
+    realFpthread_key_create = dlsym(RTLD_NEXT, "pthread_key_create");
+    realFpthread_key_delete = dlsym(RTLD_NEXT, "pthread_key_delete");
+    realFpthread_getspecific = dlsym(RTLD_NEXT, "pthread_getspecific");
+    realFpthread_setspecific = dlsym(RTLD_NEXT, "pthread_setspecific");
 
     task_pool_init(&global_pool, 1);
     num_cpus = get_nprocs();
@@ -175,6 +183,20 @@ int nanosleep(
     return 0;
 }
 
+void launch_co(
+    coroutine_entry entry,
+    void *user_data
+) {
+    start_coroutine(&global_pool, 8192, entry, user_data);
+}
+
+void * extract_co_user_data(
+    struct coroutine *co
+) {
+    return co -> user_data;
+}
+
+/*
 struct fake_thread_info {
     void *(*start_routine)(void *);
     void *arg;
@@ -205,8 +227,8 @@ int pthread_cancel(pthread_t thread) {
 }
 
 int pthread_detach(pthread_t thread) {
-    /*printf("pthread_detach\n");
-    abort();*/
+    //printf("pthread_detach\n");
+    //abort();
     return 0;
 }
 
@@ -225,14 +247,25 @@ int pthread_join(pthread_t thread, void **p1) {
     abort();
 }
 
-/*
-pthread_t pthread_self() {
-    //printf("pthread_self\n");
-    abort();
-}
-*/
-
 int pthread_setschedparam(pthread_t thread, int p1, const struct sched_param *p2) {
     //printf("pthread_setschedparam\n");
     abort();
 }
+
+// FIXME: the scheduler itself uses TLS. UB here?
+int pthread_key_create(pthread_key_t *key, void (*destructor) (void *)) {
+    abort();
+
+    int id = task_pool_add_cls_slot(&global_pool, destructor);
+    *key = (unsigned int) id;
+    return 0;
+}
+
+int pthread_key_delete(pthread_key_t key) {
+    abort();
+}
+
+void * pthread_getspecific(pthread_key_t key) {
+    abort();
+}
+*/
