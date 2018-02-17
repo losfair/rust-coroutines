@@ -59,6 +59,8 @@ void coroutine_init(
     coroutine_entry entry,
     void *user_data
 ) {
+    int i;
+
     crt -> stack_begin = (char *) malloc(stack_size);
     crt -> stack_end = crt -> stack_begin + stack_size;
     crt -> local_rsp = (long) crt -> stack_end;
@@ -68,6 +70,22 @@ void coroutine_init(
     crt -> async_detached = 0;
     crt -> async_target = NULL;
     crt -> async_user_data = NULL;
+
+    pthread_mutex_lock(&pool -> cls_destructors_lock);
+
+    crt -> cls.n_slots = pool -> n_cls_slots;
+    assert(crt -> cls.n_slots >= 0);
+    if(crt -> cls.n_slots > 0) {
+        crt -> cls.slots = (struct cls_slot *) malloc(sizeof(struct cls_slot) * (crt -> cls.n_slots));
+        for(i = 0; i < crt -> cls.n_slots; i++) {
+            crt -> cls.slots[i].data = NULL;
+            dyn_array_index(&pool -> cls_destructors, (char **) &crt -> cls.slots[i].dtor, i);
+        }
+    } else {
+        crt -> cls.slots = NULL;
+    }
+
+    pthread_mutex_unlock(&pool -> cls_destructors_lock);
 
     crt -> pool = pool;
     crt -> entry = entry;
@@ -79,8 +97,19 @@ void coroutine_init(
 void coroutine_destroy(
     struct coroutine *crt
 ) {
+    int i;
+    cls_destructor dtor;
+
     if(crt -> stack_begin != NULL) {
         free(crt -> stack_begin);
+    }
+    if(crt -> cls.slots != NULL) {
+        assert(crt -> cls.n_slots > 0);
+        for(i = 0; i < crt -> cls.n_slots; i++) {
+            dtor = crt -> cls.slots[i].dtor;
+            if(dtor) dtor(crt -> cls.slots[i].data);
+        }
+        free(crt -> cls.slots);
     }
 }
 
@@ -113,9 +142,12 @@ void task_pool_init(struct task_pool *pool, int concurrent) {
     pool -> head = (struct task_node *) malloc(sizeof(struct task_node));
     task_node_init(pool -> head);
     pool -> tail = pool -> head;
+    pool -> n_cls_slots = 0;
+    dyn_array_init(&pool -> cls_destructors, sizeof(cls_destructor));
     pool -> concurrent = concurrent;
     sem_init(&pool -> elem_notify, 0, 0);
     pthread_mutex_init(&pool -> lock, NULL);
+    pthread_mutex_init(&pool -> cls_destructors_lock, NULL);
 }
 
 void task_pool_destroy(struct task_pool *pool) {
@@ -133,8 +165,11 @@ void task_pool_destroy(struct task_pool *pool) {
 
     pool -> head = NULL;
     pool -> tail = NULL;
+
+    dyn_array_destroy(&pool -> cls_destructors);
     sem_destroy(&pool -> elem_notify);
     pthread_mutex_destroy(&pool -> lock);
+    pthread_mutex_destroy(&pool -> cls_destructors_lock);
 }
 
 void task_pool_debug_print(struct task_pool *pool) {
@@ -185,6 +220,32 @@ struct task_node * task_pool_pop_node(struct task_pool *pool) {
 
     if(pool -> concurrent) pthread_mutex_unlock(&pool -> lock);
     return ret;
+}
+
+int task_pool_get_n_cls_slots(struct task_pool *pool) {
+    int ret;
+
+    pthread_mutex_lock(&pool -> cls_destructors_lock);
+    ret = pool -> n_cls_slots;
+    pthread_mutex_unlock(&pool -> cls_destructors_lock);
+
+    return ret;
+}
+
+int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor) {
+    int n_slots;
+
+    pthread_mutex_lock(&pool -> cls_destructors_lock);
+
+    n_slots = pool -> n_cls_slots;
+    assert(n_slots == dyn_array_n_elems(&pool -> cls_destructors));
+
+    dyn_array_push(&pool -> cls_destructors, (char *) dtor);
+    pool -> n_cls_slots ++;
+
+    pthread_mutex_unlock(&pool -> cls_destructors_lock);
+
+    return n_slots;
 }
 
 void scheduler_init(struct scheduler *sch, struct task_pool *pool) {

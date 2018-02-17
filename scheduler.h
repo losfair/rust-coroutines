@@ -1,6 +1,7 @@
 #ifndef _SCHEDULER_H_
 #define _SCHEDULER_H_
 
+#include "dyn_array.h"
 #include "sched_helper.h"
 #include <semaphore.h>
 #include <pthread.h>
@@ -14,6 +15,17 @@ struct task_pool;
 
 typedef void (*coroutine_entry)(struct coroutine *crt);
 typedef void (*coroutine_async_entry)(struct coroutine *crt, void *user_data);
+typedef void (*cls_destructor)(void *data);
+
+struct cls_slot {
+    void *data;
+    cls_destructor dtor;
+};
+
+struct coroutine_local_storage {
+    int n_slots;
+    struct cls_slot *slots;
+};
 
 struct coroutine {
     char *stack_begin;
@@ -29,6 +41,7 @@ struct coroutine {
     void *async_user_data;
 
     struct task_pool *pool;
+    struct coroutine_local_storage cls;
 
     coroutine_entry entry;
     void *user_data;
@@ -70,6 +83,10 @@ struct task_pool {
     struct task_node *head;
     struct task_node *tail;
 
+    int n_cls_slots;
+    struct dyn_array cls_destructors;
+    pthread_mutex_t cls_destructors_lock;
+
     sem_t elem_notify;
     int concurrent;
     pthread_mutex_t lock;
@@ -81,6 +98,8 @@ void task_pool_init(struct task_pool *pool, int concurrent);
 void task_pool_destroy(struct task_pool *pool);
 void task_pool_push_node(struct task_pool *pool, struct task_node *node);
 struct task_node * task_pool_pop_node(struct task_pool *pool);
+int task_pool_get_n_cls_slots(struct task_pool *pool);
+int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor);
 
 struct scheduler {
     struct task_pool *pool;
