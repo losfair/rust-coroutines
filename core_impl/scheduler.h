@@ -32,6 +32,7 @@ struct coroutine {
     char *stack_end;
     long local_rsp;
     long caller_rsp;
+    int initialized;
     int terminated;
 
     // async_detached == 1 && async_target != NULL && async_user_data is valid

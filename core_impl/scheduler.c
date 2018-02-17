@@ -74,6 +74,7 @@ void coroutine_init(
     crt -> stack_end = crt -> stack_begin + stack_size;
     crt -> local_rsp = (long) crt -> stack_end;
     crt -> caller_rsp = 0;
+    crt -> initialized = 0;
     crt -> terminated = 0;
 
     crt -> async_detached = 0;
@@ -100,8 +101,6 @@ void coroutine_init(
     crt -> pool = pool;
     crt -> entry = entry;
     crt -> user_data = user_data;
-
-    init_co_stack(&crt -> caller_rsp, &crt -> local_rsp, coroutine_target_init, (void *) crt);
 }
 
 void coroutine_destroy(
@@ -130,7 +129,12 @@ void coroutine_run(
         fprintf(stderr, "ERROR: Attempting to call coroutine_run() on a terminated coroutine\n");
         abort();
     }
-    yield_now(&crt -> caller_rsp, &crt -> local_rsp);
+    if(crt -> initialized) {
+        yield_now(&crt -> caller_rsp, &crt -> local_rsp);
+    } else {
+        init_co_stack(&crt -> caller_rsp, &crt -> local_rsp, coroutine_target_init, (void *) crt);
+        crt -> initialized = 1;
+    }
 }
 
 void task_node_init(struct task_node *node) {
