@@ -4,9 +4,6 @@ use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
 
 fn handle_client(mut stream: TcpStream) {
-    let mut rb: Vec<u8> = vec![0; 4096];
-    stream.read(&mut rb).unwrap();
-    stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).unwrap();
     stream.write("Hello world\n".as_bytes());
 }
 
