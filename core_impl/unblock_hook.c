@@ -69,12 +69,12 @@ static void * _do_poll(void *unused) {
     struct coroutine *co;
 
     while(1) {
+        // All events registered to epoll_fd should have the EPOLLONESHOT bit set
+        // to prevent being `async_exit`ed multiple times.
         n_ready = epoll_wait(epoll_fd, ev, MAX_N_EPOLL_EVENTS, -1);
         for(i = 0; i < n_ready; i++) {
             req = ev[i].data.ptr;
-            if(!req -> co) {
-                continue;
-            }
+            assert(req -> co != NULL);
             co = req -> co;
             req -> co = NULL; // `req` should be released by the requesting coroutine
             memcpy(&req -> ev, &ev[i], sizeof(struct epoll_event));
@@ -184,7 +184,7 @@ static void _enter_nanosleep(struct coroutine *co, void *raw_context) {
     struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
     pc -> co = co;
 
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.ptr = pc;
 
     assert(epoll_ctl(
@@ -261,7 +261,7 @@ static void _enter_accept4(struct coroutine *co, void *raw_context) {
     struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
     pc -> co = co;
 
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.ptr = pc;
 
     status = epoll_ctl(
@@ -276,7 +276,6 @@ static void _enter_accept4(struct coroutine *co, void *raw_context) {
 int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     struct coroutine *co;
     int status;
-    int connfd;
     struct accept4_context context;
     struct co_poll_context *pc;
     struct epoll_event ev_builder;
@@ -311,6 +310,10 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     }
 
     return status;
+}
+
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    return accept4(sockfd, addr, addrlen, 0);
 }
 
 void launch_co(
