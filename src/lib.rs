@@ -1,5 +1,4 @@
-#![feature(fnbox)]
-use std::boxed::FnBox;
+use std::cell::RefCell;
 
 #[repr(C)]
 struct CoroutineImpl {
@@ -25,11 +24,11 @@ extern "C" {
 }
 
 struct CoroutineEntry {
-    entry: Box<FnBox() + Send + 'static>
+    entry: Box<Fn() + Send + 'static>
 }
 
 extern "C" fn _launch(co: *const CoroutineImpl) {
-    let mut target = unsafe { Box::from_raw(
+    let target = unsafe { Box::from_raw(
         extract_co_user_data(co) as *const CoroutineEntry as *mut CoroutineEntry
     ) };
     let entry = target.entry;
@@ -37,8 +36,11 @@ extern "C" fn _launch(co: *const CoroutineImpl) {
 }
 
 pub fn spawn<F: FnOnce() + Send + 'static>(entry: F) {
+    let entry = RefCell::new(Some(entry));
     let co = Box::new(CoroutineEntry {
-        entry: Box::new(entry)
+        entry: Box::new(move || {
+            (entry.borrow_mut().take().unwrap())();
+        })
     });
     unsafe {
         launch_co(
