@@ -86,6 +86,38 @@ It should be noted that **all data structures related to blocking `libstd` API c
 
 The performance of rust-coroutines is similar to most other (stackful/stackless) coroutine libraries in Rust, including [may](https://github.com/Xudong-Huang/may) and [futures](https://github.com/rust-lang-nursery/futures-rs) (with tokio).
 
+With a modified version of [corona](https://github.com/vorner/corona) benchmarks:
+
+```
+test async                        ... bench:  31,028,198 ns/iter (+/- 2,738,679)
+test async_cpupool                ... bench:  29,813,426 ns/iter (+/- 14,394,817)
+test async_cpupool_cpus           ... bench:  31,497,284 ns/iter (+/- 7,074,686)
+test async_cpupool_many           ... bench:  30,785,178 ns/iter (+/- 7,982,811)
+test async_cpus                   ... bench:  25,660,063 ns/iter (+/- 204,811,182)
+test async_many                   ... bench:  24,347,067 ns/iter (+/- 1,980,457)
+test corona                       ... bench:  38,565,408 ns/iter (+/- 1,717,367)
+test corona_blocking_wrapper      ... bench:  38,856,394 ns/iter (+/- 2,242,614)
+test corona_blocking_wrapper_cpus ... bench:  29,147,673 ns/iter (+/- 89,727,410)
+test corona_blocking_wrapper_many ... bench:  28,384,512 ns/iter (+/- 2,480,628)
+test corona_cpus                  ... bench:  28,862,550 ns/iter (+/- 2,197,395)
+test corona_many                  ... bench:  28,509,142 ns/iter (+/- 2,767,814)
+test coroutines                   ... bench:  26,673,276 ns/iter (+/- 3,232,604)
+test coroutines_cpus              ... bench:  27,194,849 ns/iter (+/- 2,787,879)
+test coroutines_many              ... bench:  26,744,986 ns/iter (+/- 3,161,595)
+test futures                      ... bench:  30,695,434 ns/iter (+/- 2,447,777)
+test futures_cpupool              ... bench:  29,626,141 ns/iter (+/- 3,090,787)
+test futures_cpupool_cpus         ... bench:  30,573,408 ns/iter (+/- 3,549,979)
+test futures_cpupool_many         ... bench:  30,276,154 ns/iter (+/- 4,121,736)
+test futures_cpus                 ... bench:  24,814,705 ns/iter (+/- 2,107,849)
+test futures_many                 ... bench:  24,750,719 ns/iter (+/- 1,875,699)
+test may                          ... bench:  27,553,510 ns/iter (+/- 3,164,095)
+test may_cpus                     ... bench:  28,315,233 ns/iter (+/- 2,892,440)
+test may_many                     ... bench:  27,812,071 ns/iter (+/- 2,814,072)
+test threads                      ... bench:  42,440,270 ns/iter (+/- 4,181,660)
+test threads_cpus                 ... bench:  40,202,798 ns/iter (+/- 6,837,590)
+test threads_many                 ... bench:  40,259,324 ns/iter (+/- 864,916,488)
+```
+
 ## Bugs
 
 - Patch for synchronization primitives is not yet implemented. As a result, any operations that involve locks etc. might result in a deadlock or even undefined behavior. This will hopefully get fixed soon :-)
