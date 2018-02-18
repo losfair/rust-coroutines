@@ -50,7 +50,11 @@ void coroutine_async_exit(
     task_node_init(node);
     node -> crt = crt;
 
-    task_pool_push_node(crt -> pool, node);
+    if(crt -> pinned_scheduler != NULL) {
+        task_list_push_node(&crt -> pinned_scheduler -> local_tasks, node);
+    } else {
+        task_pool_push_node(crt -> pool, node);
+    }
 }
 
 static void coroutine_target_init(void *raw_crt) {
@@ -98,6 +102,7 @@ void coroutine_init(
 
     pthread_mutex_unlock(&pool -> cls_destructors_lock);
 
+    crt -> n_pin_reasons = 0;
     crt -> current_scheduler = NULL;
     crt -> pinned_scheduler = NULL;
 
@@ -140,6 +145,33 @@ void coroutine_run(
     }
 }
 
+void coroutine_inc_n_pin_reasons(
+    struct coroutine *crt
+) {
+    assert(crt -> current_scheduler != NULL);
+    assert(crt -> n_pin_reasons >= 0);
+    if(crt -> n_pin_reasons == 0) {
+        crt -> n_pin_reasons = 1;
+        assert(crt -> pinned_scheduler == NULL);
+        crt -> pinned_scheduler = crt -> current_scheduler;
+    } else {
+        crt -> n_pin_reasons ++;
+    }
+}
+
+void coroutine_dec_n_pin_reasons(
+    struct coroutine *crt
+) {
+    assert(crt -> current_scheduler != NULL);
+    assert(crt -> n_pin_reasons > 0 && crt -> pinned_scheduler != NULL);
+    if(crt -> n_pin_reasons == 1) {
+        crt -> n_pin_reasons = 0;
+        crt -> pinned_scheduler = NULL;
+    } else {
+        crt -> n_pin_reasons --;
+    }
+}
+
 void task_node_init(struct task_node *node) {
     node -> crt = NULL;
     node -> prev = NULL;
@@ -160,6 +192,7 @@ void task_list_init(struct task_list *list, int concurrent) {
     list -> head = (struct task_node *) malloc(sizeof(struct task_node));
     task_node_init(list -> head);
     list -> tail = list -> head;
+    list -> n_pop_awaiters = 0;
     list -> concurrent = concurrent;
     sem_init(&list -> elem_notify, 0, 0);
     pthread_mutex_init(&list -> lock, NULL);
@@ -167,6 +200,8 @@ void task_list_init(struct task_list *list, int concurrent) {
 
 void task_list_destroy(struct task_list *list) {
     struct task_node *current, *next;
+
+    assert(list -> n_pop_awaiters == 0);
 
     current = list -> head;
     assert(current -> prev == NULL);
@@ -189,6 +224,8 @@ void task_pool_init(struct task_pool *pool, int concurrent) {
     task_list_init(&pool -> tasks, concurrent);
 
     pool -> n_cls_slots = 0;
+    pool -> n_schedulers = 0;
+    pool -> n_busy_schedulers = 0;
     dyn_array_init(&pool -> cls_destructors, sizeof(cls_destructor));
     pthread_mutex_init(&pool -> cls_destructors_lock, NULL);
 }
@@ -228,11 +265,32 @@ void task_list_push_node(struct task_list *list, struct task_node *node) {
     sem_post(&list -> elem_notify);
 }
 
+int task_list_is_empty(struct task_list *list) {
+    int ret;
+
+    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
+
+    assert(list -> head -> prev == NULL);
+    if(list -> head -> next == NULL) {
+        ret = 1;
+    } else {
+        ret = 0;
+    }
+
+    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
+
+    return ret;
+}
+
 struct task_node * task_list_pop_node(struct task_list *list) {
     struct task_node *ret;
 
+    __atomic_fetch_add(&list -> n_pop_awaiters, 1, __ATOMIC_RELAXED);
+
     sem_wait(&list -> elem_notify);
     if(list -> concurrent) pthread_mutex_lock(&list -> lock);
+
+    __atomic_fetch_sub(&list -> n_pop_awaiters, 1, __ATOMIC_RELAXED);
 
     assert(list -> head -> prev == NULL);
     assert(list -> head -> next != NULL);
@@ -286,10 +344,13 @@ int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor) {
 
 void scheduler_init(struct scheduler *sch, struct task_pool *pool) {
     sch -> pool = pool;
+    task_list_init(&sch -> local_tasks, 1); // Does it have to be concurrent?
+    __atomic_fetch_add(&pool -> n_schedulers, 1, __ATOMIC_RELAXED);
 }
 
 void scheduler_destroy(struct scheduler *sch) {
-
+    task_list_destroy(&sch -> local_tasks);
+    __atomic_fetch_sub(&sch -> pool -> n_schedulers, 1, __ATOMIC_RELAXED);
 }
 
 // TODO: Graceful cleanup (?)
@@ -308,11 +369,16 @@ void scheduler_run(struct scheduler *sch) {
     while(1) {
         if(pinned) {
             current = pinned;
+        } else if(!task_list_is_empty(&sch -> local_tasks)) {
+            current = task_list_pop_node(&sch -> local_tasks);
+            pinned = current;
         } else {
             current = task_pool_pop_node(sch -> pool);
             pinned = current;
             //printf("Pinning %p to scheduler %p\n", current, sch);
         }
+
+        __atomic_fetch_add(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);
 
         //printf("Scheduler %p got task\n", sch);
 
@@ -336,6 +402,8 @@ void scheduler_run(struct scheduler *sch) {
         } else {
             //task_pool_push_node(sch -> pool, current);
         }
+
+        __atomic_fetch_sub(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);
     }
 }
 

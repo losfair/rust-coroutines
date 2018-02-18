@@ -19,6 +19,7 @@
 static struct task_pool global_pool;
 static int epoll_fd;
 static unsigned long event_count = 0;
+static int global_initialized = 0;
 
 static ssize_t (*realFwrite)(int fd, const void *buf, size_t nbytes);
 static ssize_t (*realFread)(int fd, void *buf, size_t nbytes);
@@ -373,10 +374,68 @@ ssize_t recv(int socket, void *buffer, size_t length, int flags) {
     return recvfrom(socket, buffer, length, flags, NULL, 0);
 }
 
+extern int __pthread_mutex_lock(pthread_mutex_t *mutex);
+int pthread_mutex_lock(pthread_mutex_t *mutex) {
+    struct coroutine *co;
+
+    if(!global_initialized) {
+        return __pthread_mutex_lock(mutex);
+    }
+
+    int ret = __pthread_mutex_lock(mutex);
+    if(ret < 0) return ret;
+
+    co = current_coroutine();
+    if(co != NULL) {
+        coroutine_inc_n_pin_reasons(co);
+    }
+
+    return ret;
+}
+
+extern int __pthread_mutex_trylock(pthread_mutex_t *mutex);
+int pthread_mutex_trylock(pthread_mutex_t *mutex) {
+    struct coroutine *co;
+
+    if(!global_initialized) {
+        return __pthread_mutex_trylock(mutex);
+    }
+
+    int ret = __pthread_mutex_trylock(mutex);
+    if(ret < 0) return ret;
+
+    co = current_coroutine();
+    if(co != NULL) {
+        coroutine_inc_n_pin_reasons(co);
+    }
+
+    return ret;
+}
+
+extern int __pthread_mutex_unlock(pthread_mutex_t *mutex);
+int pthread_mutex_unlock(pthread_mutex_t *mutex) {
+    struct coroutine *co;
+
+    if(!global_initialized) {
+        return __pthread_mutex_unlock(mutex);
+    }
+
+    int ret = __pthread_mutex_unlock(mutex);
+    if(ret < 0) return ret;
+
+    co = current_coroutine();
+    if(co != NULL) {
+        coroutine_dec_n_pin_reasons(co);
+    }
+
+    return ret;
+}
+
 void launch_co(
     coroutine_entry entry,
     void *user_data
 ) {
+    global_initialized = 1;
     start_coroutine(&global_pool, 8192, entry, user_data);
 }
 
