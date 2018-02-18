@@ -98,6 +98,9 @@ void coroutine_init(
 
     pthread_mutex_unlock(&pool -> cls_destructors_lock);
 
+    crt -> current_scheduler = NULL;
+    crt -> pinned_scheduler = NULL;
+
     crt -> pool = pool;
     crt -> entry = entry;
     crt -> user_data = user_data;
@@ -153,22 +156,19 @@ void task_node_destroy(struct task_node *node) {
     node -> next = NULL;
 }
 
-void task_pool_init(struct task_pool *pool, int concurrent) {
-    pool -> head = (struct task_node *) malloc(sizeof(struct task_node));
-    task_node_init(pool -> head);
-    pool -> tail = pool -> head;
-    pool -> n_cls_slots = 0;
-    dyn_array_init(&pool -> cls_destructors, sizeof(cls_destructor));
-    pool -> concurrent = concurrent;
-    sem_init(&pool -> elem_notify, 0, 0);
-    pthread_mutex_init(&pool -> lock, NULL);
-    pthread_mutex_init(&pool -> cls_destructors_lock, NULL);
+void task_list_init(struct task_list *list, int concurrent) {
+    list -> head = (struct task_node *) malloc(sizeof(struct task_node));
+    task_node_init(list -> head);
+    list -> tail = list -> head;
+    list -> concurrent = concurrent;
+    sem_init(&list -> elem_notify, 0, 0);
+    pthread_mutex_init(&list -> lock, NULL);
 }
 
-void task_pool_destroy(struct task_pool *pool) {
+void task_list_destroy(struct task_list *list) {
     struct task_node *current, *next;
 
-    current = pool -> head;
+    current = list -> head;
     assert(current -> prev == NULL);
 
     while(current) {
@@ -178,19 +178,32 @@ void task_pool_destroy(struct task_pool *pool) {
         current = next;
     }
 
-    pool -> head = NULL;
-    pool -> tail = NULL;
+    list -> head = NULL;
+    list -> tail = NULL;
+
+    sem_destroy(&list -> elem_notify);
+    pthread_mutex_destroy(&list -> lock);
+}
+
+void task_pool_init(struct task_pool *pool, int concurrent) {
+    task_list_init(&pool -> tasks, concurrent);
+
+    pool -> n_cls_slots = 0;
+    dyn_array_init(&pool -> cls_destructors, sizeof(cls_destructor));
+    pthread_mutex_init(&pool -> cls_destructors_lock, NULL);
+}
+
+void task_pool_destroy(struct task_pool *pool) {
+    task_list_destroy(&pool -> tasks);
 
     dyn_array_destroy(&pool -> cls_destructors);
-    sem_destroy(&pool -> elem_notify);
-    pthread_mutex_destroy(&pool -> lock);
     pthread_mutex_destroy(&pool -> cls_destructors_lock);
 }
 
-void task_pool_debug_print(struct task_pool *pool) {
+void task_list_debug_print(struct task_list *list) {
     struct task_node *current;
 
-    current = pool -> head;
+    current = list -> head;
     assert(current -> prev == NULL);
 
     printf("----- BEGIN -----\n");
@@ -201,40 +214,48 @@ void task_pool_debug_print(struct task_pool *pool) {
     printf("----- END -----\n");
 }
 
-void task_pool_push_node(struct task_pool *pool, struct task_node *node) {
-    if(pool -> concurrent) pthread_mutex_lock(&pool -> lock);
+void task_list_push_node(struct task_list *list, struct task_node *node) {
+    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
 
-    assert(pool -> tail -> next == NULL);
+    assert(list -> tail -> next == NULL);
     assert(node -> prev == NULL && node -> next == NULL);
 
-    pool -> tail -> next = node;
-    node -> prev = pool -> tail;
-    pool -> tail = node;
+    list -> tail -> next = node;
+    node -> prev = list -> tail;
+    list -> tail = node;
 
-    if(pool -> concurrent) pthread_mutex_unlock(&pool -> lock);
-    sem_post(&pool -> elem_notify);
+    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
+    sem_post(&list -> elem_notify);
 }
 
-struct task_node * task_pool_pop_node(struct task_pool *pool) {
+struct task_node * task_list_pop_node(struct task_list *list) {
     struct task_node *ret;
 
-    sem_wait(&pool -> elem_notify);
-    if(pool -> concurrent) pthread_mutex_lock(&pool -> lock);
+    sem_wait(&list -> elem_notify);
+    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
 
-    assert(pool -> head -> prev == NULL);
-    assert(pool -> head -> next != NULL);
-    ret = pool -> head -> next;
-    pool -> head -> next = ret -> next;
-    if(ret -> next) ret -> next -> prev = pool -> head;
+    assert(list -> head -> prev == NULL);
+    assert(list -> head -> next != NULL);
+    ret = list -> head -> next;
+    list -> head -> next = ret -> next;
+    if(ret -> next) ret -> next -> prev = list -> head;
     ret -> prev = NULL;
     ret -> next = NULL;
 
-    if(ret == pool -> tail) {
-        pool -> tail = pool -> head;
+    if(ret == list -> tail) {
+        list -> tail = list -> head;
     }
 
-    if(pool -> concurrent) pthread_mutex_unlock(&pool -> lock);
+    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
     return ret;
+}
+
+void task_pool_push_node(struct task_pool *pool, struct task_node *node) {
+    task_list_push_node(&pool -> tasks, node);
+}
+
+struct task_node * task_pool_pop_node(struct task_pool *pool) {
+    return task_list_pop_node(&pool -> tasks);
 }
 
 int task_pool_get_n_cls_slots(struct task_pool *pool) {
@@ -276,6 +297,11 @@ void scheduler_run(struct scheduler *sch) {
     struct task_node *current, *pinned;
     struct coroutine *target_crt;
 
+    // There are two kinds of pinning:
+    // 1) Temporary pinning (while a coroutine is being executed)
+    //    indicated by the `pinned` local variable
+    // 2) permanent pinning (specified by `target_crt -> pinned_scheduler`)
+
     pinned = NULL;
     assert(current_co == NULL); // nested schedulers are not allowed
 
@@ -291,7 +317,9 @@ void scheduler_run(struct scheduler *sch) {
         //printf("Scheduler %p got task\n", sch);
 
         current_co = current -> crt;
+        current -> crt -> current_scheduler = sch;
         coroutine_run(current -> crt);
+        current -> crt -> current_scheduler = NULL;
         current_co = NULL;
 
         if(current -> crt -> terminated) {

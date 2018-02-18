@@ -10,12 +10,22 @@
 extern "C" {
 #endif
 
+struct scheduler;
 struct coroutine;
 struct task_pool;
 
 typedef void (*coroutine_entry)(struct coroutine *crt);
 typedef void (*coroutine_async_entry)(struct coroutine *crt, void *user_data);
 typedef void (*cls_destructor)(void *data);
+
+struct task_list {
+    struct task_node *head;
+    struct task_node *tail;
+
+    sem_t elem_notify;
+    int concurrent;
+    pthread_mutex_t lock;
+};
 
 struct cls_slot {
     void *data;
@@ -41,6 +51,9 @@ struct coroutine {
     coroutine_async_entry async_target;
     void *async_user_data;
     void *async_return_data;
+
+    struct scheduler *current_scheduler;
+    struct scheduler *pinned_scheduler;
 
     struct task_pool *pool;
     struct coroutine_local_storage cls;
@@ -83,17 +96,18 @@ struct task_node {
 };
 
 struct task_pool {
-    struct task_node *head;
-    struct task_node *tail;
+    struct task_list tasks;
 
     int n_cls_slots;
     struct dyn_array cls_destructors;
     pthread_mutex_t cls_destructors_lock;
-
-    sem_t elem_notify;
-    int concurrent;
-    pthread_mutex_t lock;
 };
+
+void task_list_init(struct task_list *list, int concurrent);
+void task_list_destroy(struct task_list *list);
+void task_list_debug_print(struct task_list *list);
+void task_list_push_node(struct task_list *list, struct task_node *node);
+struct task_node * task_list_pop_node(struct task_list *list);
 
 void task_node_init(struct task_node *node);
 void task_node_destroy(struct task_node *node);
