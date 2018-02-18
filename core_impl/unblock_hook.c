@@ -49,6 +49,9 @@ static int (*realFbind)(int sockfd, const struct sockaddr *addr, socklen_t addrl
 static int (*realFlisten)(int sockfd, int backlog);
 static int (*realFaccept)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 static int (*realFaccept4)(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags);
+static ssize_t (*realFsend)(int socket, const void *buffer, size_t length, int flags);
+static ssize_t (*realFsendto)(int socket, const void *message, size_t length, int flags, const struct sockaddr *dest_addr, socklen_t dest_len);
+static ssize_t (*realFrecvfrom)(int socket, void *restrict buffer, size_t length, int flags, struct sockaddr *restrict address, socklen_t *restrict address_len);
 
 static void * _run_scheduler(void *raw_sch) {
     struct scheduler *sch = (struct scheduler *) raw_sch;
@@ -111,6 +114,9 @@ static void __attribute__((constructor)) __init() {
     realFlisten = dlsym(RTLD_NEXT, "listen");
     realFaccept = dlsym(RTLD_NEXT, "accept");
     realFaccept4 = dlsym(RTLD_NEXT, "accept4");
+    realFsend = dlsym(RTLD_NEXT, "send");
+    realFsendto = dlsym(RTLD_NEXT, "sendto");
+    realFrecvfrom = dlsym(RTLD_NEXT, "recvfrom");
 
     task_pool_init(&global_pool, 1);
     num_cpus = get_nprocs();
@@ -246,6 +252,31 @@ int listen(int sockfd, int backlog) {
     return realFlisten(sockfd, backlog);
 }
 
+struct poll_fd_request {
+    int fd;
+    int mode;
+};
+
+static void enter_poll_fd(struct coroutine *co, void *raw_req) {
+    int status;
+    struct epoll_event ev;
+    struct poll_fd_request *req = raw_req;
+
+    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
+    pc -> co = co;
+
+    ev.events = req -> mode | EPOLLET | EPOLLONESHOT;
+    ev.data.ptr = pc;
+
+    status = epoll_ctl(
+        epoll_fd,
+        EPOLL_CTL_ADD,
+        req -> fd,
+        &ev
+    );
+    assert(status >= 0);
+}
+
 struct accept4_context {
     int sockfd;
     struct sockaddr *addr;
@@ -253,50 +284,29 @@ struct accept4_context {
     int flags;
 };
 
-static void _enter_accept4(struct coroutine *co, void *raw_context) {
-    int status;
-    struct epoll_event ev;
-    struct accept4_context *context = raw_context;
-
-    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
-    pc -> co = co;
-
-    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    ev.data.ptr = pc;
-
-    status = epoll_ctl(
-        epoll_fd,
-        EPOLL_CTL_ADD,
-        context -> sockfd,
-        &ev
-    );
-    assert(status >= 0);
-}
-
 int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     struct coroutine *co;
     int status;
-    struct accept4_context context;
+    struct poll_fd_request poll_req;
     struct co_poll_context *pc;
-    struct epoll_event ev_builder;
 
     co = current_coroutine();
     if(co == NULL) {
         return realFaccept(sockfd, addr, addrlen);
     }
 
-    context.sockfd = sockfd;
-    context.addr = addr;
-    context.addrlen = addrlen;
-    context.flags = flags | SOCK_NONBLOCK;
+    flags |= SOCK_NONBLOCK;
 
-    status = realFaccept4(context.sockfd, context.addr, context.addrlen, context.flags);
+    poll_req.fd = sockfd;
+    poll_req.mode = EPOLLIN;
+
+    status = realFaccept4(sockfd, addr, addrlen, flags);
     while(status < 0) {
         if(errno != EAGAIN && errno != EWOULDBLOCK) {
             return status;
         }
 
-        pc = coroutine_async_enter(co, _enter_accept4, &context);
+        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
         free(pc);
 
         assert(epoll_ctl(
@@ -306,7 +316,7 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
             NULL
         ) >= 0);
 
-        status = realFaccept4(context.sockfd, context.addr, context.addrlen, context.flags);
+        status = realFaccept4(sockfd, addr, addrlen, flags);
     }
 
     return status;
@@ -314,6 +324,105 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
 
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     return accept4(sockfd, addr, addrlen, 0);
+}
+
+ssize_t sendto(
+    int socket,
+    const void *message,
+    size_t length,
+    int flags,
+    const struct sockaddr *dest_addr,
+    socklen_t dest_len
+) {
+    struct coroutine *co;
+    ssize_t status;
+    struct poll_fd_request poll_req;
+    struct co_poll_context *pc;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFsendto(socket, message, length, flags, dest_addr, dest_len);
+    }
+
+    poll_req.fd = socket;
+    poll_req.mode = EPOLLOUT;
+
+    status = realFsendto(socket, message, length, flags, dest_addr, dest_len);
+    while(status < 0) {
+        if(errno != EAGAIN && errno != EWOULDBLOCK) {
+            return status;
+        }
+
+        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
+        free(pc);
+
+        assert(epoll_ctl(
+            epoll_fd,
+            EPOLL_CTL_DEL,
+            socket,
+            NULL
+        ) >= 0);
+
+        status = realFsendto(socket, message, length, flags, dest_addr, dest_len);
+    }
+
+    return status;
+}
+
+ssize_t send(
+    int socket,
+    const void *message,
+    size_t length,
+    int flags
+) {
+    return sendto(socket, message, length, flags, NULL, 0);
+}
+
+ssize_t recvfrom(
+    int socket,
+    void *restrict buffer,
+    size_t length,
+    int flags,
+    struct sockaddr *restrict address,
+    socklen_t *restrict address_len
+) {
+    struct coroutine *co;
+    ssize_t status;
+    struct poll_fd_request poll_req;
+    struct co_poll_context *pc;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFrecvfrom(socket, buffer, length, flags, address, address_len);
+    }
+
+    poll_req.fd = socket;
+    poll_req.mode = EPOLLIN;
+
+    status = realFrecvfrom(socket, buffer, length, flags, address, address_len);
+    while(status < 0) {
+        if(errno != EAGAIN && errno != EWOULDBLOCK) {
+            return status;
+        }
+
+        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
+        free(pc);
+
+        assert(epoll_ctl(
+            epoll_fd,
+            EPOLL_CTL_DEL,
+            socket,
+            NULL
+        ) >= 0);
+
+        status = realFrecvfrom(socket, buffer, length, flags, address, address_len);
+    }
+
+    return status;
+}
+
+ssize_t recv(int socket, void *buffer, size_t length, int flags) {
+    return recvfrom(socket, buffer, length, flags, NULL, 0);
 }
 
 void launch_co(
