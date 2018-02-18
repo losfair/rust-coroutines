@@ -133,36 +133,6 @@ static void __attribute__((constructor)) __init() {
     realFpthread_create(&tinfo, NULL, _do_poll, NULL);
 }
 
-static inline void try_yield() {
-    return;
-    printf("try_yield()\n");
-
-    struct coroutine *co = current_coroutine();
-    if(co) {
-        coroutine_yield(co);
-    }
-}
-
-ssize_t write(int fd, const void *buf, size_t nbytes) {
-    try_yield();
-    return realFwrite(fd, buf, nbytes);
-}
-
-ssize_t read(int fd, void *buf, size_t nbytes) {
-    try_yield();
-    return realFread(fd, buf, nbytes);
-}
-
-int open(const char *file, int oflag) {
-    try_yield();
-    return realFopen(file, oflag);
-}
-
-int close(int fd) {
-    try_yield();
-    return realFclose(fd);
-}
-
 struct nanosleep_context {
     int tfd; // out
     const struct timespec *requested_time; // in
