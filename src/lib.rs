@@ -21,6 +21,7 @@ extern "C" {
     fn extract_co_user_data(
         co: *const CoroutineImpl
     ) -> *const AnyUserData;
+    fn co_get_global_event_count() -> usize;
 }
 
 struct CoroutineEntry {
@@ -52,5 +53,11 @@ pub fn spawn_inherit<F: FnOnce() + Send + 'static>(entry: F) {
         ::std::thread::spawn(entry);
     } else {
         spawn(entry);
+    }
+}
+
+pub fn global_event_count() -> usize {
+    unsafe {
+        co_get_global_event_count()
     }
 }

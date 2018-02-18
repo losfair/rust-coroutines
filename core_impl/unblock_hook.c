@@ -18,6 +18,7 @@
 
 static struct task_pool global_pool;
 static int epoll_fd;
+static unsigned long event_count = 0;
 
 static ssize_t (*realFwrite)(int fd, const void *buf, size_t nbytes);
 static ssize_t (*realFread)(int fd, void *buf, size_t nbytes);
@@ -83,6 +84,7 @@ static void * _do_poll(void *unused) {
             memcpy(&req -> ev, &ev[i], sizeof(struct epoll_event));
             coroutine_async_exit(co, req);
         }
+        __atomic_fetch_add(&event_count, (unsigned long) n_ready, __ATOMIC_RELAXED);
     }
 }
 
@@ -382,4 +384,8 @@ void * extract_co_user_data(
     struct coroutine *co
 ) {
     return co -> user_data;
+}
+
+unsigned long co_get_global_event_count() {
+    return __atomic_load_n(&event_count, __ATOMIC_RELAXED);
 }

@@ -8,6 +8,7 @@ use httparse::Status;
 use bytes::BufMut;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::time::Duration;
 
 fn req_done(buf: &[u8], path: &mut String) -> Option<usize> {
     let mut headers = [httparse::EMPTY_HEADER; 16];
@@ -72,7 +73,8 @@ fn main() {
     coroutines::spawn(run);
     //std::thread::spawn(run);
 
-    let m = std::sync::Mutex::new(false);
-    let _a = m.lock().unwrap();
-    let _b = m.lock().unwrap(); // deadlock!
+    loop {
+        ::std::thread::sleep(Duration::from_secs(5));
+        println!("Global event count: {}", coroutines::global_event_count());
+    }
 }
