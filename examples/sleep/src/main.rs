@@ -1,5 +1,4 @@
 extern crate coroutines;
-use coroutines::Coroutine;
 
 fn sleep_thread() {
     println!("sleep_thread enter");
@@ -8,10 +7,8 @@ fn sleep_thread() {
 }
 
 fn main() {
-    unsafe { coroutines::init(); }
-
     for _ in 0..5 {
-        Coroutine::spawn(sleep_thread);
+        coroutines::spawn(sleep_thread);
     }
 
     std::thread::sleep(std::time::Duration::from_secs(1));
