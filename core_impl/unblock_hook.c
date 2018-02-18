@@ -133,95 +133,6 @@ static void __attribute__((constructor)) __init() {
     realFpthread_create(&tinfo, NULL, _do_poll, NULL);
 }
 
-struct nanosleep_context {
-    int tfd; // out
-    const struct timespec *requested_time; // in
-};
-
-static void _enter_nanosleep(struct coroutine *co, void *raw_context) {
-    struct nanosleep_context *context = (struct nanosleep_context *) raw_context;
-
-    const struct timespec *requested_time = context -> requested_time;
-    struct itimerspec ts;
-    struct epoll_event ev;
-
-    context -> tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-    assert(context -> tfd >= 0);
-
-    ts.it_interval.tv_sec = 0;
-    ts.it_interval.tv_nsec = 0;
-    ts.it_value.tv_sec = requested_time -> tv_sec;
-    ts.it_value.tv_nsec = requested_time -> tv_nsec;
-
-    assert(
-        timerfd_settime(context -> tfd, 0, &ts, NULL) >= 0
-    );
-
-    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
-    pc -> co = co;
-
-    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    ev.data.ptr = pc;
-
-    assert(epoll_ctl(
-        epoll_fd,
-        EPOLL_CTL_ADD,
-        context -> tfd,
-        &ev
-    ) >= 0);
-}
-
-int nanosleep(
-    const struct timespec *requested_time,
-    struct timespec *remaining
-) {
-    struct coroutine *co;
-    struct nanosleep_context context;
-    struct co_poll_context *ctx;
-
-    co = current_coroutine();
-    if(co == NULL) {
-        return realFnanosleep(requested_time, remaining);
-    }
-
-    context.requested_time = requested_time;
-    context.tfd = -1;
-
-    ctx = coroutine_async_enter(co, _enter_nanosleep, (void *) &context);
-    free(ctx);
-
-    assert(epoll_ctl(
-        epoll_fd,
-        EPOLL_CTL_DEL,
-        context.tfd,
-        NULL
-    ) >= 0);
-    realFclose(context.tfd);
-    return 0;
-}
-
-int socket(int domain, int type, int protocol) {
-    struct coroutine *co;
-    int fd;
-
-    co = current_coroutine();
-    if(co == NULL) {
-        return realFsocket(domain, type, protocol);
-    }
-
-    type |= SOCK_NONBLOCK;
-    fd = realFsocket(domain, type, protocol);
-    return fd;
-}
-
-int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    return realFbind(sockfd, addr, addrlen);
-}
-
-int listen(int sockfd, int backlog) {
-    return realFlisten(sockfd, backlog);
-}
-
 struct poll_fd_request {
     int fd;
     int mode;
@@ -245,6 +156,71 @@ static void enter_poll_fd(struct coroutine *co, void *raw_req) {
         &ev
     );
     assert(status >= 0);
+}
+
+int nanosleep(
+    const struct timespec *requested_time,
+    struct timespec *remaining
+) {
+    struct coroutine *co;
+    int tfd;
+    struct itimerspec ts;
+    struct poll_fd_request poll_req;
+    struct co_poll_context *ctx;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFnanosleep(requested_time, remaining);
+    }
+
+    tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+    assert(tfd >= 0);
+
+    ts.it_interval.tv_sec = 0;
+    ts.it_interval.tv_nsec = 0;
+    ts.it_value.tv_sec = requested_time -> tv_sec;
+    ts.it_value.tv_nsec = requested_time -> tv_nsec;
+
+    assert(
+        timerfd_settime(tfd, 0, &ts, NULL) >= 0
+    );
+
+    poll_req.fd = tfd;
+    poll_req.mode = EPOLLIN;
+
+    ctx = coroutine_async_enter(co, enter_poll_fd, &poll_req);
+    free(ctx);
+
+    assert(epoll_ctl(
+        epoll_fd,
+        EPOLL_CTL_DEL,
+        tfd,
+        NULL
+    ) >= 0);
+    realFclose(tfd);
+    return 0;
+}
+
+int socket(int domain, int type, int protocol) {
+    struct coroutine *co;
+    int fd;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFsocket(domain, type, protocol);
+    }
+
+    type |= SOCK_NONBLOCK;
+    fd = realFsocket(domain, type, protocol);
+    return fd;
+}
+
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    return realFbind(sockfd, addr, addrlen);
+}
+
+int listen(int sockfd, int backlog) {
+    return realFlisten(sockfd, backlog);
 }
 
 struct accept4_context {
