@@ -12,6 +12,7 @@
 #include <sys/timerfd.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <fcntl.h>
 #include "scheduler.h"
 
 #define MAX_N_EPOLL_EVENTS 16
@@ -54,6 +55,7 @@ static int (*realFaccept4)(int sockfd, struct sockaddr *addr, socklen_t *addrlen
 static ssize_t (*realFsend)(int socket, const void *buffer, size_t length, int flags);
 static ssize_t (*realFsendto)(int socket, const void *message, size_t length, int flags, const struct sockaddr *dest_addr, socklen_t dest_len);
 static ssize_t (*realFrecvfrom)(int socket, void *restrict buffer, size_t length, int flags, struct sockaddr *restrict address, socklen_t *restrict address_len);
+static int (*realFconnect)(int socket, const struct sockaddr *address, socklen_t address_len);
 static int (*realFpthread_mutex_timedlock)(
     pthread_mutex_t *mutex,
     const struct timespec *abstime
@@ -185,6 +187,7 @@ static void __attribute__((constructor)) __init() {
     realFsend = dlsym(RTLD_NEXT, "send");
     realFsendto = dlsym(RTLD_NEXT, "sendto");
     realFrecvfrom = dlsym(RTLD_NEXT, "recvfrom");
+    realFconnect = dlsym(RTLD_NEXT, "connect");
     realFpthread_mutex_timedlock = dlsym(RTLD_NEXT, "pthread_mutex_timedlock");
     realFpthread_rwlock_timedrdlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedrdlock");
     realFpthread_rwlock_timedwrlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedwrlock");
@@ -291,13 +294,6 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 int listen(int sockfd, int backlog) {
     return realFlisten(sockfd, backlog);
 }
-
-struct accept4_context {
-    int sockfd;
-    struct sockaddr *addr;
-    socklen_t *addrlen;
-    int flags;
-};
 
 int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     struct coroutine *co;
@@ -433,6 +429,43 @@ ssize_t recvfrom(
         status = realFrecvfrom(socket, buffer, length, flags, address, address_len);
     }
 
+    return status;
+}
+
+int connect(int socket, const struct sockaddr *address, socklen_t address_len) {
+    struct coroutine *co;
+    int status;
+    struct poll_fd_request poll_req;
+    struct co_poll_context *pc;
+
+    co = current_coroutine();
+    if(co == NULL) {
+        return realFconnect(socket, address, address_len);
+    }
+
+    poll_req.fd = socket;
+    poll_req.mode = EPOLLOUT;
+
+    status = realFconnect(socket, address, address_len);
+    while(status < 0) {
+        if(errno != EINPROGRESS && errno != EALREADY) {
+            return status;
+        }
+
+        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
+        free(pc);
+
+        assert(epoll_ctl(
+            epoll_fd,
+            EPOLL_CTL_DEL,
+            socket,
+            NULL
+        ) >= 0);
+
+        status = realFconnect(socket, address, address_len);
+    }
+
+    assert(fcntl(status, F_SETFL, fcntl(status, F_GETFL, 0) | O_NONBLOCK) >= 0);
     return status;
 }
 
