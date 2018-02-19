@@ -19,8 +19,8 @@ typedef void (*coroutine_async_entry)(struct coroutine *crt, void *user_data);
 typedef void (*cls_destructor)(void *data);
 
 struct task_list {
-    struct task_node *head;
-    struct task_node *tail;
+    struct coroutine *head;
+    struct coroutine *tail;
 
     int n_pop_awaiters;
 
@@ -64,6 +64,9 @@ struct coroutine {
 
     coroutine_entry entry;
     void *user_data;
+
+    struct coroutine *prev;
+    struct coroutine *next;
 };
 
 void coroutine_yield(
@@ -101,12 +104,6 @@ void coroutine_dec_n_pin_reasons(
     struct coroutine *crt
 );
 
-struct task_node {
-    struct coroutine *crt;
-    struct task_node *prev;
-    struct task_node *next;
-};
-
 struct task_pool {
     struct task_list tasks;
 
@@ -121,16 +118,14 @@ struct task_pool {
 void task_list_init(struct task_list *list, int concurrent);
 void task_list_destroy(struct task_list *list);
 void task_list_debug_print(struct task_list *list);
-void task_list_push_node(struct task_list *list, struct task_node *node);
-struct task_node * task_list_pop_node(struct task_list *list);
+void task_list_push_node(struct task_list *list, struct coroutine *node);
+struct coroutine * task_list_pop_node(struct task_list *list);
 int task_list_is_empty(struct task_list *list);
 
-void task_node_init(struct task_node *node);
-void task_node_destroy(struct task_node *node);
 void task_pool_init(struct task_pool *pool, int concurrent);
 void task_pool_destroy(struct task_pool *pool);
-void task_pool_push_node(struct task_pool *pool, struct task_node *node);
-struct task_node * task_pool_pop_node(struct task_pool *pool);
+void task_pool_push_node(struct task_pool *pool, struct coroutine *node);
+struct coroutine * task_pool_pop_node(struct task_pool *pool);
 int task_pool_get_n_cls_slots(struct task_pool *pool);
 int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor);
 int task_pool_get_and_reset_n_period_sched_status_updates(struct task_pool *pool);
