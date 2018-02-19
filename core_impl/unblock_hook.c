@@ -54,6 +54,18 @@ static int (*realFaccept4)(int sockfd, struct sockaddr *addr, socklen_t *addrlen
 static ssize_t (*realFsend)(int socket, const void *buffer, size_t length, int flags);
 static ssize_t (*realFsendto)(int socket, const void *message, size_t length, int flags, const struct sockaddr *dest_addr, socklen_t dest_len);
 static ssize_t (*realFrecvfrom)(int socket, void *restrict buffer, size_t length, int flags, struct sockaddr *restrict address, socklen_t *restrict address_len);
+static int (*realFpthread_mutex_timedlock)(
+    pthread_mutex_t *mutex,
+    const struct timespec *abstime
+);
+static int (*realFpthread_rwlock_timedrdlock)(
+    pthread_rwlock_t *restrict rwlock,
+    const struct timespec *restrict abs_timeout
+);
+static int (*realFpthread_rwlock_timedwrlock)(
+    pthread_rwlock_t *restrict rwlock,
+    const struct timespec *restrict abs_timeout
+);
 
 static void * _run_scheduler(void *raw_sch) {
     struct scheduler *sch = (struct scheduler *) raw_sch;
@@ -173,6 +185,9 @@ static void __attribute__((constructor)) __init() {
     realFsend = dlsym(RTLD_NEXT, "send");
     realFsendto = dlsym(RTLD_NEXT, "sendto");
     realFrecvfrom = dlsym(RTLD_NEXT, "recvfrom");
+    realFpthread_mutex_timedlock = dlsym(RTLD_NEXT, "pthread_mutex_timedlock");
+    realFpthread_rwlock_timedrdlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedrdlock");
+    realFpthread_rwlock_timedwrlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedwrlock");
 
     task_pool_init(&global_pool, 1);
     num_cpus = get_nprocs();
@@ -425,61 +440,117 @@ ssize_t recv(int socket, void *buffer, size_t length, int flags) {
     return recvfrom(socket, buffer, length, flags, NULL, 0);
 }
 
+#define IMPL_LOCKING_PINNING_OVERRIDE(lock_expr, pin_reason_modifier) \
+    struct coroutine *co; \
+    if(!global_initialized) { \
+        return lock_expr; \
+    } \
+    int ret = lock_expr; \
+    if(ret < 0) return ret; \
+    co = current_coroutine(); \
+    if(co != NULL) { \
+        pin_reason_modifier(co); \
+    } \
+    return ret;
+
 extern int __pthread_mutex_lock(pthread_mutex_t *mutex);
 int pthread_mutex_lock(pthread_mutex_t *mutex) {
-    struct coroutine *co;
-
-    if(!global_initialized) {
-        return __pthread_mutex_lock(mutex);
-    }
-
-    int ret = __pthread_mutex_lock(mutex);
-    if(ret < 0) return ret;
-
-    co = current_coroutine();
-    if(co != NULL) {
-        coroutine_inc_n_pin_reasons(co);
-    }
-
-    return ret;
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_mutex_lock(mutex),
+        coroutine_inc_n_pin_reasons
+    )
 }
 
 extern int __pthread_mutex_trylock(pthread_mutex_t *mutex);
 int pthread_mutex_trylock(pthread_mutex_t *mutex) {
-    struct coroutine *co;
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_mutex_trylock(mutex),
+        coroutine_inc_n_pin_reasons
+    )
+}
 
-    if(!global_initialized) {
-        return __pthread_mutex_trylock(mutex);
-    }
-
-    int ret = __pthread_mutex_trylock(mutex);
-    if(ret < 0) return ret;
-
-    co = current_coroutine();
-    if(co != NULL) {
-        coroutine_inc_n_pin_reasons(co);
-    }
-
-    return ret;
+int pthread_mutex_timedlock (
+    pthread_mutex_t *mutex,
+    const struct timespec *abstime
+) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        realFpthread_mutex_timedlock(mutex, abstime),
+        coroutine_inc_n_pin_reasons
+    )
 }
 
 extern int __pthread_mutex_unlock(pthread_mutex_t *mutex);
 int pthread_mutex_unlock(pthread_mutex_t *mutex) {
-    struct coroutine *co;
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_mutex_unlock(mutex),
+        coroutine_dec_n_pin_reasons
+    )
+}
 
-    if(!global_initialized) {
-        return __pthread_mutex_unlock(mutex);
-    }
+extern int __pthread_rwlock_rdlock(pthread_rwlock_t *rwlock);
+int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_rwlock_rdlock(rwlock),
+        coroutine_inc_n_pin_reasons
+    )
+}
 
-    int ret = __pthread_mutex_unlock(mutex);
-    if(ret < 0) return ret;
+extern int __pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock);
+int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_rwlock_tryrdlock(rwlock),
+        coroutine_inc_n_pin_reasons
+    )
+}
 
-    co = current_coroutine();
-    if(co != NULL) {
-        coroutine_dec_n_pin_reasons(co);
-    }
+extern int __pthread_rwlock_wrlock(pthread_rwlock_t *rwlock);
+int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_rwlock_wrlock(rwlock),
+        coroutine_inc_n_pin_reasons
+    )
+}
 
-    return ret;
+extern int __pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock);
+int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_rwlock_trywrlock(rwlock),
+        coroutine_inc_n_pin_reasons
+    )
+}
+
+int pthread_rwlock_timedrdlock(
+    pthread_rwlock_t *restrict rwlock,
+    const struct timespec *restrict abs_timeout
+) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        realFpthread_rwlock_timedrdlock(
+            rwlock,
+            abs_timeout
+        ),
+        coroutine_inc_n_pin_reasons
+    )
+}
+
+int pthread_rwlock_timedwrlock(
+    pthread_rwlock_t *restrict rwlock,
+    const struct timespec *restrict abs_timeout
+) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        realFpthread_rwlock_timedwrlock(
+            rwlock,
+            abs_timeout
+        ),
+        coroutine_inc_n_pin_reasons
+    )
+}
+
+extern int __pthread_rwlock_unlock(pthread_rwlock_t *rwlock);
+int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
+    IMPL_LOCKING_PINNING_OVERRIDE(
+        __pthread_rwlock_unlock(rwlock),
+        coroutine_dec_n_pin_reasons
+    )
 }
 
 void launch_co(
