@@ -88,7 +88,7 @@ It should be noted that **all data structures related to blocking `libstd` API c
 
 The performance of rust-coroutines is similar to most other (stackful/stackless) coroutine libraries in Rust, including [may](https://github.com/Xudong-Huang/may) and [futures](https://github.com/rust-lang-nursery/futures-rs) (with tokio).
 
-With a modified version of [corona](https://github.com/vorner/corona) benchmarks:
+With a [modified version](https://github.com/losfair/corona) of [corona](https://github.com/vorner/corona) benchmarks:
 
 ```
 test async                        ... bench:  31,028,198 ns/iter (+/- 2,738,679)
