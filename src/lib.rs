@@ -1,6 +1,11 @@
+extern crate spin;
+
 pub mod promise;
 
 use std::cell::RefCell;
+use std::any::Any;
+use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 pub use promise::Promise;
 
 #[repr(C)]
@@ -39,34 +44,115 @@ extern "C" {
     );
 }
 
-struct CoroutineEntry {
-    entry: Box<Fn() + Send + 'static>
+struct CoroutineEntry<
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    E: FnOnce(Result<T, Box<Any + Send>>) + Send + 'static
+> {
+    entry: Option<F>,
+    on_exit: Option<E>
 }
 
-extern "C" fn _launch(co: *const CoroutineImpl) {
-    let target = unsafe { Box::from_raw(
-        extract_co_user_data(co) as *const CoroutineEntry as *mut CoroutineEntry
+extern "C" fn _launch<
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    E: FnOnce(Result<T, Box<Any + Send>>) + Send + 'static
+>(co: *const CoroutineImpl) {
+    let mut target = unsafe { Box::from_raw(
+        extract_co_user_data(co) as *const CoroutineEntry<T, F, E> as *mut CoroutineEntry<T, F, E>
     ) };
-    let entry = target.entry;
-    (entry)();
+    let entry = target.entry.take().unwrap();
+    let ret = catch_unwind(AssertUnwindSafe(move || (entry)()));
+    (target.on_exit.take().unwrap())(ret);
 }
 
-pub fn spawn<F: FnOnce() + Send + 'static>(entry: F) {
-    let entry = RefCell::new(Some(entry));
+fn spawn_with_callback<
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    E: FnOnce(Result<T, Box<Any + Send>>) + Send + 'static
+>(entry: F, cb: E) {
     let co = Box::new(CoroutineEntry {
-        entry: Box::new(move || {
-            (entry.borrow_mut().take().unwrap())();
-        })
+        entry: Some(entry),
+        on_exit: Some(cb)
     });
     unsafe {
         launch_co(
-            _launch,
+            _launch::<T, F, E>,
             Box::into_raw(co) as *const AnyUserData
         );
     }
 }
 
-pub fn spawn_inherit<F: FnOnce() + Send + 'static>(entry: F) {
+pub struct JoinHandle<T: Send + 'static> {
+    state: Arc<spin::Mutex<JoinHandleState<T>>>
+}
+
+impl<T: Send + 'static> JoinHandle<T> {
+    fn priv_clone(&self) -> JoinHandle<T> {
+        JoinHandle {
+            state: self.state.clone()
+        }
+    }
+
+    pub fn join(self) -> Result<T, Box<Any + Send>> {
+        Promise::await(move |p| {
+            let mut result: Option<Result<T, Box<Any + Send>>> = None;
+
+            let mut state = self.state.lock();
+            let result = match ::std::mem::replace(&mut *state, JoinHandleState::Empty) {
+                JoinHandleState::Empty => None,
+                JoinHandleState::Done(v) => Some(v),
+                JoinHandleState::Pending(_) => unreachable!()
+            };
+            if let Some(result) = result {
+                drop(state);
+                p.resolve(result);
+            } else {
+                *state = JoinHandleState::Pending(p);
+            }
+        })
+    }
+}
+
+enum JoinHandleState<T: Send + 'static> {
+    Empty,
+    Done(Result<T, Box<Any + Send>>),
+    Pending(Promise<Result<T, Box<Any + Send>>>)
+}
+
+pub fn fast_spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) {
+    spawn_with_callback(entry, |_| {});
+}
+
+pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) -> JoinHandle<T> {
+    let handle = JoinHandle {
+        state: Arc::new(spin::Mutex::new(JoinHandleState::Empty as JoinHandleState<T>))
+    };
+    let handle2 = handle.priv_clone();
+    spawn_with_callback(entry, move |ret| {
+        let mut ret = Some(ret);
+        let mut resolve_target: Option<Promise<Result<T, Box<Any + Send>>>> = None;
+
+        let mut state = handle2.state.lock();
+        let new_state = match ::std::mem::replace(&mut *state, JoinHandleState::Empty) {
+            JoinHandleState::Empty => JoinHandleState::Done(ret.take().unwrap()),
+            JoinHandleState::Pending(p) => {
+                resolve_target = Some(p);
+                JoinHandleState::Empty
+            },
+            JoinHandleState::Done(_) => unreachable!()
+        };
+        *state = new_state;
+        drop(state);
+
+        if let Some(p) = resolve_target {
+            p.resolve(ret.take().unwrap());
+        }
+    });
+    handle
+}
+
+pub fn spawn_inherit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) {
     if unsafe { current_coroutine() }.is_null() {
         ::std::thread::spawn(entry);
     } else {
@@ -77,5 +163,41 @@ pub fn spawn_inherit<F: FnOnce() + Send + 'static>(entry: F) {
 pub fn global_event_count() -> usize {
     unsafe {
         co_get_global_event_count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn test_spawn_join_instant() {
+        let (tx, rx) = mpsc::channel();
+        super::fast_spawn(move || {
+            let handle = super::spawn(|| {
+                42
+            });
+            ::std::thread::sleep(Duration::from_millis(50));
+            let v: i32 = handle.join().unwrap();
+            assert!(v == 42);
+            tx.send(());
+        });
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_spawn_join_deferred() {
+        let (tx, rx) = mpsc::channel();
+        super::fast_spawn(move || {
+            let handle = super::spawn(|| {
+                ::std::thread::sleep(Duration::from_millis(50));
+                42
+            });
+            let v: i32 = handle.join().unwrap();
+            assert!(v == 42);
+            tx.send(());
+        });
+        rx.recv().unwrap();
     }
 }
