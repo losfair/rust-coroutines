@@ -2,7 +2,6 @@ extern crate spin;
 
 pub mod promise;
 
-use std::cell::RefCell;
 use std::any::Any;
 use std::sync::Arc;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -96,8 +95,6 @@ impl<T: Send + 'static> JoinHandle<T> {
 
     pub fn join(self) -> Result<T, Box<Any + Send>> {
         Promise::await(move |p| {
-            let mut result: Option<Result<T, Box<Any + Send>>> = None;
-
             let mut state = self.state.lock();
             let result = match ::std::mem::replace(&mut *state, JoinHandleState::Empty) {
                 JoinHandleState::Empty => None,
@@ -181,7 +178,7 @@ mod tests {
             ::std::thread::sleep(Duration::from_millis(50));
             let v: i32 = handle.join().unwrap();
             assert!(v == 42);
-            tx.send(());
+            tx.send(()).unwrap();
         });
         rx.recv().unwrap();
     }
@@ -196,7 +193,7 @@ mod tests {
             });
             let v: i32 = handle.join().unwrap();
             assert!(v == 42);
-            tx.send(());
+            tx.send(()).unwrap();
         });
         rx.recv().unwrap();
     }
