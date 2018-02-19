@@ -407,6 +407,8 @@ void scheduler_run(struct scheduler *sch) {
 
         if(current -> terminated) {
             coroutine_destroy(current);
+            free(current);
+            current = NULL;
             pinned = NULL;
         } else if(current -> async_detached) {
             target_crt = current;
