@@ -2,7 +2,9 @@
 
 'Native' stackful coroutine library for Rust.
 
-Replace `thread::spawn` with `coroutines::spawn` and that's all. Everything will just work!
+Replace `std::thread::spawn` with `coroutines::spawn` and that's all. Everything will just work!
+
+[![Crates.io](https://img.shields.io/crates/v/coroutines.svg)](https://crates.io/crates/coroutines)
 
 ## Features
 
