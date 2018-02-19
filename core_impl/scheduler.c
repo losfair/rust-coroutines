@@ -226,6 +226,7 @@ void task_pool_init(struct task_pool *pool, int concurrent) {
     pool -> n_cls_slots = 0;
     pool -> n_schedulers = 0;
     pool -> n_busy_schedulers = 0;
+    pool -> n_period_sched_status_updates = 0;
     dyn_array_init(&pool -> cls_destructors, sizeof(cls_destructor));
     pthread_mutex_init(&pool -> cls_destructors_lock, NULL);
 }
@@ -235,6 +236,18 @@ void task_pool_destroy(struct task_pool *pool) {
 
     dyn_array_destroy(&pool -> cls_destructors);
     pthread_mutex_destroy(&pool -> cls_destructors_lock);
+}
+
+int task_pool_get_and_reset_n_period_sched_status_updates(struct task_pool *pool) {
+    return __atomic_exchange_n(&pool -> n_period_sched_status_updates, 0, __ATOMIC_RELAXED);
+}
+
+int task_pool_get_n_available_schedulers(struct task_pool *pool) {
+    int total = __atomic_load_n(&pool -> n_schedulers, __ATOMIC_RELAXED);
+    int busy = __atomic_load_n(&pool -> n_busy_schedulers, __ATOMIC_RELAXED);
+    assert(total >= busy);
+    assert(busy >= 0);
+    return total - busy;
 }
 
 void task_list_debug_print(struct task_list *list) {
@@ -355,6 +368,7 @@ void scheduler_destroy(struct scheduler *sch) {
 
 // TODO: Graceful cleanup (?)
 void scheduler_run(struct scheduler *sch) {
+    int has_perm_pinning;
     struct task_node *current, *pinned;
     struct coroutine *target_crt;
 
@@ -363,13 +377,14 @@ void scheduler_run(struct scheduler *sch) {
     //    indicated by the `pinned` local variable
     // 2) permanent pinning (specified by `target_crt -> pinned_scheduler`)
 
+    has_perm_pinning = 0;
     pinned = NULL;
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
         if(pinned) {
             current = pinned;
-        } else if(!task_list_is_empty(&sch -> local_tasks)) {
+        } else if(has_perm_pinning) {
             current = task_list_pop_node(&sch -> local_tasks);
             pinned = current;
         } else {
@@ -379,7 +394,7 @@ void scheduler_run(struct scheduler *sch) {
         }
 
         __atomic_fetch_add(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);
-
+        __atomic_fetch_add(&sch -> pool -> n_period_sched_status_updates, 1, __ATOMIC_RELAXED);
         //printf("Scheduler %p got task\n", sch);
 
         current_co = current -> crt;
@@ -387,6 +402,19 @@ void scheduler_run(struct scheduler *sch) {
         coroutine_run(current -> crt);
         current -> crt -> current_scheduler = NULL;
         current_co = NULL;
+
+        if(current -> crt -> pinned_scheduler) {
+            assert(current -> crt -> pinned_scheduler == sch);
+            /*if(!has_perm_pinning) {
+                printf("Permanent pinning begin\n");
+            }*/
+            has_perm_pinning = 1;
+        } else {
+            /*if(has_perm_pinning) {
+                printf("Permanent pinning end\n");
+            }*/
+            has_perm_pinning = 0;
+        }
 
         if(current -> crt -> terminated) {
             task_node_destroy(current);

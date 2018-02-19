@@ -113,6 +113,7 @@ struct task_pool {
     int n_cls_slots;
     int n_schedulers;
     int n_busy_schedulers;
+    int n_period_sched_status_updates;
     struct dyn_array cls_destructors;
     pthread_mutex_t cls_destructors_lock;
 };
@@ -132,6 +133,8 @@ void task_pool_push_node(struct task_pool *pool, struct task_node *node);
 struct task_node * task_pool_pop_node(struct task_pool *pool);
 int task_pool_get_n_cls_slots(struct task_pool *pool);
 int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor);
+int task_pool_get_and_reset_n_period_sched_status_updates(struct task_pool *pool);
+int task_pool_get_n_available_schedulers(struct task_pool *pool);
 
 struct scheduler {
     struct task_pool *pool;

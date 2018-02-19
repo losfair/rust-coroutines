@@ -61,12 +61,66 @@ static void * _run_scheduler(void *raw_sch) {
     return NULL;
 }
 
+static void _start_scheduler() {
+    struct scheduler *sch;
+    pthread_t tinfo;
+
+    sch = malloc(sizeof(struct scheduler));
+    scheduler_init(sch, &global_pool);
+    pthread_create(&tinfo, NULL, _run_scheduler, sch);
+}
+
 struct co_poll_context {
     struct coroutine *co;
     struct epoll_event ev;
 };
 
+static void *_monitor_available_schedulers(void *unused) {
+    const int START_SCHEDULER_DELAY = 3; // iterations
+    int n_available_schedulers;
+    int n_updates;
+    int start_count = 0;
+    int warning_showed = 0;
+    int rem_iters = START_SCHEDULER_DELAY;
+    int num_cpus = get_nprocs();
+
+    while(1) {
+        usleep(200000);
+        n_available_schedulers = task_pool_get_n_available_schedulers(&global_pool);
+        //printf("n_available_schedulers = %d\n", n_available_schedulers);
+        if(n_available_schedulers == 0) {
+            assert(rem_iters >= 0);
+            if(rem_iters == 0) {
+                n_updates = task_pool_get_and_reset_n_period_sched_status_updates(&global_pool);
+                //printf("n_updates = %d\n", n_updates);
+                if(n_updates == 0) {
+                    if(start_count >= num_cpus * 2) {
+                        if(!warning_showed) {
+                            fprintf(
+                                stderr,
+                                "Warning: Coroutine execution has been blocked for a long time.\n"
+                                "New execution units will not be started any more.\n"
+                                "If you believe you are using coroutines correctly, it might be due to a bug in the coroutines library.\n"
+                            );
+                            warning_showed = 1;
+                        }
+                    } else {
+                        _start_scheduler();
+                        start_count ++;
+                    }
+                }
+                rem_iters = START_SCHEDULER_DELAY;
+            } else {
+                rem_iters --;
+            }
+        } else {
+            rem_iters = START_SCHEDULER_DELAY;
+        }
+    }
+}
+
 static void * _do_poll(void *unused) {
+    
     int i;
     int n_ready;
     struct epoll_event ev[MAX_N_EPOLL_EVENTS];
@@ -92,7 +146,6 @@ static void * _do_poll(void *unused) {
 static void __attribute__((constructor)) __init() {
     int i;
     int num_cpus;
-    struct scheduler *sch;
     pthread_t tinfo;
 
     realFwrite = dlsym(RTLD_NEXT, "write");
@@ -124,16 +177,14 @@ static void __attribute__((constructor)) __init() {
     task_pool_init(&global_pool, 1);
     num_cpus = get_nprocs();
     for(i = 0; i < num_cpus; i++) {
-        sch = malloc(sizeof(struct scheduler));
-        scheduler_init(sch, &global_pool);
-        realFpthread_create(&tinfo, NULL, _run_scheduler, (void *) sch);
+        _start_scheduler();
     }
-    sch = NULL;
 
     epoll_fd = epoll_create(1);
     assert(epoll_fd >= 0);
 
     realFpthread_create(&tinfo, NULL, _do_poll, NULL);
+    realFpthread_create(&tinfo, NULL, _monitor_available_schedulers, NULL);
 }
 
 struct poll_fd_request {
