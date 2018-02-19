@@ -8,7 +8,7 @@ Replace `thread::spawn` with `coroutines::spawn` and that's all. Everything will
 
 - Most `libstd` functions that was blocking get patched and become asynchronous automatically
 - Efficient asynchronous I/O and task scheduling
-- Voluntary preemption and work stealing on entry to / exit from some system calls
+- Voluntary preemption and work stealing
 
 ## How does it work?
 
@@ -118,8 +118,8 @@ test threads_cpus                 ... bench:  40,202,798 ns/iter (+/- 6,837,590)
 test threads_many                 ... bench:  40,259,324 ns/iter (+/- 864,916,488)
 ```
 
-## Bugs
+## Known issues
 
-- Patch for synchronization primitives is not yet implemented. As a result, any operations that involve locks etc. might result in a deadlock or even undefined behavior. This will hopefully get fixed soon :-)
-- Thread local storage (TLS) is not yet patched. It needs some work to figure out how to do the hookings correctly.
+- Entering asynchronous operations while holding a Mutex or RwLock on the current coroutine is currently a very expensive operation because the current coroutine has to be pinned to an execution unit and cannot yield out while waiting for the lock to be available. However, doing I/O while holding a lock is a slow operation itself so performance penalty with coroutine pinning / blocking wait will not be noticed most of the time.
+- Thread local storage (TLS) is not yet patched and might be dangerous to use across an async_enter/exit boundary. It needs some work to figure out how to do the hookings correctly.
 - Only x86-64 Linux is supported at the moment. Porting to other Unix-like systems and i386 & ARM architectures is planned.
