@@ -1,18 +1,23 @@
+pub mod promise;
+
 use std::cell::RefCell;
+pub use promise::Promise;
 
 #[repr(C)]
-struct CoroutineImpl {
+pub(crate) struct CoroutineImpl {
     _dummy: usize
 }
 
 #[repr(C)]
-struct AnyUserData {
+pub(crate) struct AnyUserData {
     _dummy: usize
 }
+
+pub(crate) type AsyncEntry = extern "C" fn (co: *const CoroutineImpl, data: *const AnyUserData);
 
 #[link(name = "unblock_hook", kind = "dylib")]
 extern "C" {
-    fn current_coroutine() -> *const CoroutineImpl;
+    pub(crate) fn current_coroutine() -> *const CoroutineImpl;
     fn launch_co(
         entry: extern "C" fn (*const CoroutineImpl),
         user_data: *const AnyUserData
@@ -21,6 +26,17 @@ extern "C" {
         co: *const CoroutineImpl
     ) -> *const AnyUserData;
     fn co_get_global_event_count() -> usize;
+
+    pub(crate) fn coroutine_async_enter(
+        co: *const CoroutineImpl,
+        entry: AsyncEntry,
+        data: *const AnyUserData
+    ) -> *const AnyUserData;
+    
+    pub(crate) fn coroutine_async_exit(
+        co: *const CoroutineImpl,
+        data: *const AnyUserData
+    );
 }
 
 struct CoroutineEntry {
