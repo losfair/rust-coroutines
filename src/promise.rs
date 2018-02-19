@@ -3,6 +3,7 @@ use super::{coroutine_async_enter, coroutine_async_exit, current_coroutine};
 
 pub struct Promise<T: Send> {
     co: *const CoroutineImpl,
+    resolved: bool,
     result: Option<T>
 }
 
@@ -29,6 +30,7 @@ impl<T: Send> Promise<T> {
 
         let p = Promise {
             co: co,
+            resolved: false,
             result: None
         };
 
@@ -37,7 +39,7 @@ impl<T: Send> Promise<T> {
             entry: Some(f)
         };
 
-        let p = unsafe {
+        let mut p = unsafe {
             Box::from_raw(
                 coroutine_async_enter(
                     co,
@@ -47,7 +49,8 @@ impl<T: Send> Promise<T> {
             )
         };
 
-        p.result.unwrap()
+        p.resolved = true;
+        ::std::mem::replace(&mut p.result, None).unwrap()
     }
 
     pub fn resolve(mut self, result: T) {
@@ -62,6 +65,13 @@ impl<T: Send> Promise<T> {
     }
 }
 
+impl<T: Send> Drop for Promise<T> {
+    fn drop(&mut self) {
+        if !self.resolved {
+            panic!("Promise dropped without resolve");
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
