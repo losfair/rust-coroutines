@@ -591,7 +591,9 @@ void launch_co(
     void *user_data
 ) {
     global_initialized = 1;
-    start_coroutine(&global_pool, 8192, entry, user_data);
+
+    // Lazy page allocation?
+    start_coroutine(&global_pool, 4096 * 16, entry, user_data);
 }
 
 void * extract_co_user_data(
