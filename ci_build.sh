@@ -1,7 +1,7 @@
 #!/bin/bash
 
-export CC=clang-5.0
-export CXX=clang++-5.0
+export CC=/usr/local/clang-5.0.0/bin/clang-5.0
+export CXX=/usr/local/clang-5.0.0/bin/clang++-5.0
 
 cd core_impl
 make || exit 1
