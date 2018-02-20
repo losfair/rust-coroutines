@@ -80,22 +80,35 @@ impl<T: Send + 'static> Drop for Promise<T> {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     #[test]
     fn test_promise() {
         for _ in 0..100 {
-            let (tx, rx) = mpsc::channel();
-            super::super::spawn(move || {
-                let v: i32 = super::Promise::await(move |p| {
+            let result: i32 = super::super::spawn(move || {
+                super::Promise::await(move |p| {
                     super::super::spawn(move || {
                         p.resolve(42);
                     });
-                });
-                tx.send(v).unwrap();
-            });
-            let result: i32 = rx.recv().unwrap();
+                })
+            }).join().unwrap();
             assert!(result == 42);
         }
+    }
+
+    #[test]
+    fn test_promise_await_out_of_co() {
+        let result: i32 = super::Promise::await(move |p| {
+            super::super::spawn(move || {
+                p.resolve(42);
+            });
+        });
+        assert!(result == 42);
+    }
+
+    #[test]
+    fn test_promise_instant_resolve() {
+        let result: i32 = super::Promise::await(move |p| {
+            p.resolve(42);
+        });
+        assert!(result == 42);
     }
 }
