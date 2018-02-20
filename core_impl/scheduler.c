@@ -45,9 +45,9 @@ void coroutine_async_exit(
     crt -> async_return_data = data;
 
     if(crt -> pinned_scheduler != NULL) {
-        task_list_push_node(&crt -> pinned_scheduler -> local_tasks, crt);
+        task_list_push_node(&crt -> pinned_scheduler -> local_tasks, queue_node_restore(crt));
     } else {
-        task_pool_push_node(crt -> pool, crt);
+        task_pool_push_node(crt -> pool, queue_node_restore(crt));
     }
 }
 
@@ -169,44 +169,18 @@ void coroutine_dec_n_pin_reasons(
     }
 }
 
-void task_list_init(struct task_list *list, int concurrent) {
-    // list -> head should never be used as a real coroutine.
-    list -> head = (struct coroutine *) malloc(sizeof(struct coroutine));
-    list -> head -> prev = NULL;
-    list -> head -> next = NULL;
-    list -> tail = list -> head;
+void task_list_init(struct task_list *list, int _concurrent /* unused */) {
+    queue_init(&list -> q, sizeof(struct coroutine), 1);
+}
 
-    list -> n_pop_awaiters = 0;
-    list -> concurrent = concurrent;
-    sem_init(&list -> elem_notify, 0, 0);
-    pthread_mutex_init(&list -> lock, NULL);
+static void _task_list_destroy_node_cb(struct queue_node *node) {
+    struct coroutine *co = queue_node_unwrap(node);
+    coroutine_destroy(co);
+    free(node);
 }
 
 void task_list_destroy(struct task_list *list) {
-    struct coroutine *current, *next;
-
-    assert(list -> n_pop_awaiters == 0);
-
-    current = list -> head;
-    assert(current != NULL);
-    assert(current -> prev == NULL);
-
-    next = current -> next;
-    free(current);
-    current = next;
-
-    while(current) {
-        next = current -> next;
-        coroutine_destroy(current);
-        free(current);
-        current = next;
-    }
-
-    list -> head = NULL;
-    list -> tail = NULL;
-
-    sem_destroy(&list -> elem_notify);
-    pthread_mutex_destroy(&list -> lock);
+    queue_destroy(&list -> q, _task_list_destroy_node_cb);
 }
 
 void task_pool_init(struct task_pool *pool, int concurrent) {
@@ -239,6 +213,7 @@ int task_pool_get_n_available_schedulers(struct task_pool *pool) {
     return total - busy;
 }
 
+/*
 void task_list_debug_print(struct task_list *list) {
     struct coroutine *current;
 
@@ -252,69 +227,25 @@ void task_list_debug_print(struct task_list *list) {
     }
     printf("----- END -----\n");
 }
+*/
 
-void task_list_push_node(struct task_list *list, struct coroutine *node) {
-    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
-
-    assert(list -> tail -> next == NULL);
-    assert(node -> prev == NULL && node -> next == NULL);
-
-    list -> tail -> next = node;
-    node -> prev = list -> tail;
-    list -> tail = node;
-
-    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
-    sem_post(&list -> elem_notify);
+void task_list_push_node(struct task_list *list, struct queue_node *node) {
+    queue_push(&list -> q, node);
 }
 
 int task_list_is_empty(struct task_list *list) {
-    int ret;
-
-    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
-
-    assert(list -> head -> prev == NULL);
-    if(list -> head -> next == NULL) {
-        ret = 1;
-    } else {
-        ret = 0;
-    }
-
-    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
-
-    return ret;
+    return queue_len(&list -> q) == 0;
 }
 
-struct coroutine * task_list_pop_node(struct task_list *list) {
-    struct coroutine *ret;
-
-    __atomic_fetch_add(&list -> n_pop_awaiters, 1, __ATOMIC_RELAXED);
-
-    sem_wait(&list -> elem_notify);
-    if(list -> concurrent) pthread_mutex_lock(&list -> lock);
-
-    __atomic_fetch_sub(&list -> n_pop_awaiters, 1, __ATOMIC_RELAXED);
-
-    assert(list -> head -> prev == NULL);
-    assert(list -> head -> next != NULL);
-    ret = list -> head -> next;
-    list -> head -> next = ret -> next;
-    if(ret -> next) ret -> next -> prev = list -> head;
-    ret -> prev = NULL;
-    ret -> next = NULL;
-
-    if(ret == list -> tail) {
-        list -> tail = list -> head;
-    }
-
-    if(list -> concurrent) pthread_mutex_unlock(&list -> lock);
-    return ret;
+struct queue_node * task_list_pop_node(struct task_list *list) {
+    return queue_pop(&list -> q);
 }
 
-void task_pool_push_node(struct task_pool *pool, struct coroutine *node) {
+void task_pool_push_node(struct task_pool *pool, struct queue_node *node) {
     task_list_push_node(&pool -> tasks, node);
 }
 
-struct coroutine * task_pool_pop_node(struct task_pool *pool) {
+struct queue_node * task_pool_pop_node(struct task_pool *pool) {
     return task_list_pop_node(&pool -> tasks);
 }
 
@@ -358,8 +289,8 @@ void scheduler_destroy(struct scheduler *sch) {
 // TODO: Graceful cleanup (?)
 void scheduler_run(struct scheduler *sch) {
     int has_perm_pinning;
-    struct coroutine *current, *pinned;
-    struct coroutine *target_crt;
+    struct queue_node *current_task_node, *pinned_task_node;
+    struct coroutine *current;
 
     // There are two kinds of pinning:
     // 1) Temporary pinning (while a coroutine is being executed)
@@ -367,20 +298,22 @@ void scheduler_run(struct scheduler *sch) {
     // 2) permanent pinning (specified by `target_crt -> pinned_scheduler`)
 
     has_perm_pinning = 0;
-    pinned = NULL;
+    pinned_task_node = NULL;
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
-        if(pinned) {
-            current = pinned;
+        if(pinned_task_node) {
+            current_task_node = pinned_task_node;
         } else if(has_perm_pinning) {
-            current = task_list_pop_node(&sch -> local_tasks);
-            pinned = current;
+            current_task_node = task_list_pop_node(&sch -> local_tasks);
+            pinned_task_node = current_task_node;
         } else {
-            current = task_pool_pop_node(sch -> pool);
-            pinned = current;
+            current_task_node = task_pool_pop_node(sch -> pool);
+            pinned_task_node = current_task_node;
             //printf("Pinning %p to scheduler %p\n", current, sch);
         }
+
+        current = queue_node_unwrap(current_task_node);
 
         __atomic_fetch_add(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sch -> pool -> n_period_sched_status_updates, 1, __ATOMIC_RELAXED);
@@ -407,14 +340,11 @@ void scheduler_run(struct scheduler *sch) {
 
         if(current -> terminated) {
             coroutine_destroy(current);
-            free(current);
-            current = NULL;
-            pinned = NULL;
+            free(current_task_node);
+            pinned_task_node = NULL;
         } else if(current -> async_detached) {
-            target_crt = current;
-            current = NULL;
-            pinned = NULL;
-            target_crt -> async_target(target_crt, target_crt -> async_user_data);
+            pinned_task_node = NULL;
+            current -> async_target(current, current -> async_user_data);
         } else {
             //task_pool_push_node(sch -> pool, current);
         }
@@ -429,11 +359,10 @@ void start_coroutine(
     coroutine_entry entry,
     void *user_data
 ) {
-    struct coroutine *crt = malloc(sizeof(struct coroutine));
-
-    coroutine_init(crt, stack_size, pool, entry, user_data);
-
-    task_pool_push_node(pool, crt);
+    struct queue_node *node = malloc(sizeof(struct queue_node) + sizeof(struct coroutine));
+    queue_node_init(node, &pool -> tasks.q);
+    coroutine_init(queue_node_unwrap(node), stack_size, pool, entry, user_data);
+    task_pool_push_node(pool, node);
 }
 
 struct coroutine * current_coroutine() {
