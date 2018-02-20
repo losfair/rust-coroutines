@@ -4,6 +4,7 @@ rm /usr/bin/clang || true
 rm /usr/bin/clang++ || true
 ln -s $(which clang-5.0) /usr/bin/clang
 ln -s $(which clang++-5.0) /usr/bin/clang++
+ls -l /usr/bin/
 
 cd core_impl
 make || exit 1
