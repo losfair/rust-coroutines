@@ -31,6 +31,10 @@ extern "C" {
     ) -> *const AnyUserData;
     fn co_get_global_event_count() -> usize;
 
+    fn coroutine_yield(
+        co: *const CoroutineImpl
+    );
+
     pub(crate) fn coroutine_async_enter(
         co: *const CoroutineImpl,
         entry: AsyncEntry,
@@ -154,6 +158,15 @@ pub fn spawn_inherit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry
         ::std::thread::spawn(entry);
     } else {
         spawn(entry);
+    }
+}
+
+pub fn yield_now() {
+    let co = unsafe { current_coroutine() };
+    if !co.is_null() {
+        unsafe {
+            coroutine_yield(co);
+        }
     }
 }
 
