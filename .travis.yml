@@ -4,11 +4,10 @@ rust:
   - beta
   - nightly
 script:
-  - sudo bash ./ci_build.sh
+  - bash ./ci_build.sh
 matrix:
   include:
     - os: linux
-      sudo: required
       dist: trusty
       addons:
         apt:
