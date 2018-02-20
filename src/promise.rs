@@ -1,31 +1,37 @@
 use super::{CoroutineImpl, AnyUserData};
 use super::{coroutine_async_enter, coroutine_async_exit, current_coroutine};
 
-pub struct Promise<T: Send> {
+pub struct Promise<T: Send + 'static> {
     co: *const CoroutineImpl,
     resolved: bool,
     result: Option<T>
 }
 
-unsafe impl<T: Send> Send for Promise<T> {}
+unsafe impl<T: Send + 'static> Send for Promise<T> {}
 
-struct Execution<T: Send, F: FnOnce(Promise<T>) + Send> {
+struct Execution<T: Send + 'static, F: FnOnce(Promise<T>) + Send + 'static> {
     promise: Option<Promise<T>>,
     entry: Option<F>
 }
 
-impl<T: Send> Promise<T> {
-    extern "C" fn _do_exec<F: FnOnce(Promise<T>) + Send>(_: *const CoroutineImpl, data: *const AnyUserData) {
+impl<T: Send + 'static> Promise<T> {
+    extern "C" fn _do_exec<F: FnOnce(Promise<T>) + Send + 'static>(_: *const CoroutineImpl, data: *const AnyUserData) {
         let exec = unsafe { &mut *(data as *mut Execution<T, F>) };
         let promise = exec.promise.take().unwrap();
         let entry = exec.entry.take().unwrap();
         entry(promise);
     }
 
-    pub fn await<F: FnOnce(Promise<T>) + Send>(f: F) -> T {
+    pub fn await<F: FnOnce(Promise<T>) + Send + 'static>(f: F) -> T {
         let co = unsafe { current_coroutine() };
         if co.is_null() {
-            panic!("Attempting to await outside of a coroutine");
+            let (tx, rx) = ::std::sync::mpsc::channel();
+
+            super::fast_spawn(move || {
+                tx.send(Self::await(f)).unwrap();
+            });
+
+            return rx.recv().unwrap();
         }
 
         let p = Promise {
@@ -65,7 +71,7 @@ impl<T: Send> Promise<T> {
     }
 }
 
-impl<T: Send> Drop for Promise<T> {
+impl<T: Send + 'static> Drop for Promise<T> {
     fn drop(&mut self) {
         if !self.resolved {
             panic!("Promise dropped without resolve");
