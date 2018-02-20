@@ -46,10 +46,5 @@ fn run() {
 }
 
 fn main() {
-    coroutines::spawn(run);
-    //std::thread::spawn(run);
-
-    let m = std::sync::Mutex::new(false);
-    let _a = m.lock().unwrap();
-    let _b = m.lock().unwrap(); // deadlock!
+    coroutines::spawn(run).join().unwrap();
 }

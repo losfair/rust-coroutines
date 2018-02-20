@@ -19,8 +19,5 @@ fn start() {
 }
 
 fn main() {
-    coroutines::spawn(start);
-    loop {
-        std::thread::sleep_ms(3600000);
-    }
+    coroutines::spawn(start).join().unwrap();
 }

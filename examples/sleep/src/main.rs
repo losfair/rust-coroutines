@@ -1,5 +1,7 @@
 extern crate coroutines;
 
+use coroutines::JoinHandle;
+
 fn sleep_thread() {
     println!("sleep_thread enter");
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -7,10 +9,10 @@ fn sleep_thread() {
 }
 
 fn main() {
-    for _ in 0..5 {
-        coroutines::spawn(sleep_thread);
+    let handles: Vec<JoinHandle<()>> = (0..5)
+        .map(|_| coroutines::spawn(sleep_thread))
+        .collect();
+    for h in handles {
+        h.join().unwrap();
     }
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    println!("main exit");
 }
