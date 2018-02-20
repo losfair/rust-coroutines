@@ -1,10 +1,7 @@
 #!/bin/bash
 
-rm /usr/bin/clang || true
-rm /usr/bin/clang++ || true
-ln -s $(which clang-5.0) /usr/bin/clang
-ln -s $(which clang++-5.0) /usr/bin/clang++
-ls -l /usr/bin/
+export CC=clang-5.0
+export CXX=clang++-5.0
 
 cd core_impl
 make || exit 1

@@ -1,7 +1,5 @@
-CC := clang
-CXX := clang++
-CFLAGS := -g -fPIC -O3 -Wall -pthread
-CXXFLAGS := -g -fPIC -O3 -Wall -pthread
+CFLAGS := -g -fPIC -O2 -Wall -pthread
+CXXFLAGS := -g -fPIC -O2 -Wall -pthread
 
 all: scheduler scheduler_test unblock_hook unblock_hook_test
 
