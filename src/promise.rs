@@ -85,7 +85,7 @@ mod tests {
         for _ in 0..100 {
             let result: i32 = super::super::spawn(move || {
                 super::Promise::await(move |p| {
-                    super::super::spawn(move || {
+                    super::super::fast_spawn(move || {
                         p.resolve(42);
                     });
                 })
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_promise_await_out_of_co() {
         let result: i32 = super::Promise::await(move |p| {
-            super::super::spawn(move || {
+            super::super::fast_spawn(move || {
                 p.resolve(42);
             });
         });

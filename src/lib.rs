@@ -165,36 +165,29 @@ pub fn global_event_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
     use std::time::Duration;
 
     #[test]
     fn test_spawn_join_instant() {
-        let (tx, rx) = mpsc::channel();
-        super::fast_spawn(move || {
+        super::spawn(move || {
             let handle = super::spawn(|| {
                 42
             });
             ::std::thread::sleep(Duration::from_millis(50));
             let v: i32 = handle.join().unwrap();
             assert!(v == 42);
-            tx.send(()).unwrap();
-        });
-        rx.recv().unwrap();
+        }).join().unwrap();
     }
 
     #[test]
     fn test_spawn_join_deferred() {
-        let (tx, rx) = mpsc::channel();
-        super::fast_spawn(move || {
+        super::spawn(move || {
             let handle = super::spawn(|| {
                 ::std::thread::sleep(Duration::from_millis(50));
                 42
             });
             let v: i32 = handle.join().unwrap();
             assert!(v == 42);
-            tx.send(()).unwrap();
-        });
-        rx.recv().unwrap();
+        }).join().unwrap();
     }
 }
