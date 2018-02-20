@@ -298,12 +298,20 @@ int listen(int sockfd, int backlog) {
 int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     struct coroutine *co;
     int status;
+    int socket_flags;
     struct poll_fd_request poll_req;
     struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
         return realFaccept(sockfd, addr, addrlen);
+    }
+
+    socket_flags = fcntl(sockfd, F_GETFL, 0);
+    if(!(socket_flags & O_NONBLOCK)) {
+        fprintf(stderr, "Warning: accept4: O_NONBLOCK not set. Setting it now.\n");
+        socket_flags |= O_NONBLOCK;
+        assert(fcntl(sockfd, F_SETFL, socket_flags) >= 0);
     }
 
     flags |= SOCK_NONBLOCK;
@@ -435,12 +443,20 @@ ssize_t recvfrom(
 int connect(int socket, const struct sockaddr *address, socklen_t address_len) {
     struct coroutine *co;
     int status;
+    int socket_flags;
     struct poll_fd_request poll_req;
     struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
         return realFconnect(socket, address, address_len);
+    }
+
+    socket_flags = fcntl(socket, F_GETFL, 0);
+    if(!(socket_flags & O_NONBLOCK)) {
+        fprintf(stderr, "Warning: connect: O_NONBLOCK not set. Setting it now.\n");
+        socket_flags |= O_NONBLOCK;
+        assert(fcntl(socket, F_SETFL, socket_flags) >= 0);
     }
 
     poll_req.fd = socket;
