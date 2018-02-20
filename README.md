@@ -5,6 +5,7 @@
 Replace `std::thread::spawn` with `coroutines::spawn` and that's all. Everything will just work!
 
 [![Crates.io](https://img.shields.io/crates/v/coroutines.svg)](https://crates.io/crates/coroutines)
+[![Build Status](https://travis-ci.org/losfair/rust-coroutines.svg?branch=master)](https://travis-ci.org/losfair/rust-coroutines)
 
 ## Features
 
