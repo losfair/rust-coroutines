@@ -50,7 +50,8 @@ struct coroutine {
     int n_pin_reasons;
 
     struct scheduler *current_scheduler;
-    struct scheduler *pinned_scheduler;
+
+    int migratable;
 
     struct task_pool *pool;
     struct coroutine_local_storage cls;
@@ -95,11 +96,25 @@ void coroutine_dec_n_pin_reasons(
     struct coroutine *crt
 );
 
+struct perf_info {
+    // The scheduler with the longest task queue
+    struct scheduler *max_sched;
+    int max_sched_len;
+
+    // shortest
+    struct scheduler *min_sched;
+    int min_sched_len;
+
+    pthread_spinlock_t lock;
+};
+
 struct task_pool {
     struct task_list tasks;
     struct resource_pool coroutine_pool;
 
     int stack_size;
+
+    struct perf_info perf;
 
     int n_cls_slots;
     int n_schedulers;

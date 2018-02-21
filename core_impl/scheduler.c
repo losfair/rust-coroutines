@@ -1,8 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <unistd.h>
 
 #include "scheduler.h"
+
+#ifdef HAS_TM
+#define CRITICAL_ENTER(lock) __transaction_atomic {
+#define CRITICAL_EXIT(lock) }
+#else
+#define CRITICAL_ENTER(lock) pthread_spin_lock(lock)
+#define CRITICAL_EXIT(lock) pthread_spin_unlock(lock)
+#endif
 
 static __thread struct coroutine *current_co = NULL;
 
@@ -44,11 +53,7 @@ void coroutine_async_exit(
     crt -> async_user_data = NULL;
     crt -> async_return_data = data;
 
-    if(crt -> pinned_scheduler != NULL) {
-        task_list_push_node(&crt -> pinned_scheduler -> local_tasks, queue_node_restore(crt));
-    } else {
-        task_pool_push_node(crt -> pool, queue_node_restore(crt));
-    }
+    queue_push(&crt -> current_scheduler -> local_tasks.q, queue_node_restore(crt));
 }
 
 static void coroutine_target_init(void *raw_crt) {
@@ -77,6 +82,8 @@ void coroutine_init(
     crt -> async_user_data = NULL;
     crt -> async_return_data = NULL;
 
+    crt -> migratable = 1;
+
     pthread_mutex_lock(&pool -> cls_destructors_lock);
 
     crt -> cls.n_slots = pool -> n_cls_slots;
@@ -95,7 +102,6 @@ void coroutine_init(
 
     crt -> n_pin_reasons = 0;
     crt -> current_scheduler = NULL;
-    crt -> pinned_scheduler = NULL;
 
     crt -> pool = pool;
     crt -> entry = entry;
@@ -137,12 +143,10 @@ void coroutine_run(
 void coroutine_inc_n_pin_reasons(
     struct coroutine *crt
 ) {
-    assert(crt -> current_scheduler != NULL);
     assert(crt -> n_pin_reasons >= 0);
     if(crt -> n_pin_reasons == 0) {
         crt -> n_pin_reasons = 1;
-        assert(crt -> pinned_scheduler == NULL);
-        crt -> pinned_scheduler = crt -> current_scheduler;
+        crt -> migratable = 0;
     } else {
         crt -> n_pin_reasons ++;
     }
@@ -151,11 +155,9 @@ void coroutine_inc_n_pin_reasons(
 void coroutine_dec_n_pin_reasons(
     struct coroutine *crt
 ) {
-    assert(crt -> current_scheduler != NULL);
-    assert(crt -> n_pin_reasons > 0 && crt -> pinned_scheduler != NULL);
     if(crt -> n_pin_reasons == 1) {
         crt -> n_pin_reasons = 0;
-        crt -> pinned_scheduler = NULL;
+        crt -> migratable = 1;
     } else {
         crt -> n_pin_reasons --;
     }
@@ -181,6 +183,13 @@ void task_pool_init(struct task_pool *pool, int stack_size, int concurrent) {
 
     pool -> stack_size = stack_size;
 
+    pool -> perf.max_sched = NULL;
+    pool -> perf.max_sched_len = -1;
+    pool -> perf.min_sched = NULL;
+    pool -> perf.min_sched_len = -1;
+
+    pthread_spin_init(&pool -> perf.lock, 0);
+
     pool -> n_cls_slots = 0;
     pool -> n_schedulers = 0;
     pool -> n_busy_schedulers = 0;
@@ -192,6 +201,8 @@ void task_pool_init(struct task_pool *pool, int stack_size, int concurrent) {
 void task_pool_destroy(struct task_pool *pool) {
     task_list_destroy(&pool -> tasks);
     resource_pool_destroy(&pool -> coroutine_pool);
+
+    pthread_spin_destroy(&pool -> perf.lock);
 
     dyn_array_destroy(&pool -> cls_destructors);
     pthread_mutex_destroy(&pool -> cls_destructors_lock);
@@ -282,22 +293,77 @@ void scheduler_destroy(struct scheduler *sch) {
     __atomic_fetch_sub(&sch -> pool -> n_schedulers, 1, __ATOMIC_RELAXED);
 }
 
+static void scheduler_try_migrate(struct scheduler *sch) {
+    const int THRESHOLD = 3;
+
+    int self_len = queue_len(&sch -> local_tasks.q);
+    struct task_pool *pool = sch -> pool;
+    struct scheduler *migration_target = NULL;
+
+    CRITICAL_ENTER(&pool -> perf.lock);
+    if(pool -> perf.max_sched == NULL || self_len > pool -> perf.max_sched_len) {
+        pool -> perf.max_sched = sch;
+        pool -> perf.max_sched_len = self_len;
+    }
+    if(pool -> perf.min_sched == NULL || self_len < pool -> perf.min_sched_len) {
+        pool -> perf.min_sched = sch;
+        pool -> perf.min_sched_len = self_len;
+    }
+    if(pool -> perf.max_sched_len - self_len > THRESHOLD) {
+        migration_target = pool -> perf.max_sched;
+        pool -> perf.max_sched = NULL;
+        pool -> perf.max_sched_len = -1;
+    }
+    CRITICAL_EXIT(&pool -> lock);
+
+    if(migration_target) {
+        struct queue_node *tail = queue_try_take_tail(&migration_target -> local_tasks.q);
+        if(tail) {
+            struct coroutine *tail_co = queue_node_unwrap(tail);
+            if(tail_co -> migratable) {
+                queue_push(&sch -> local_tasks.q, tail);
+            } else {
+                queue_push(&migration_target -> local_tasks.q, tail);
+            }
+        }
+    }
+}
+
 // TODO: Graceful cleanup (?)
 void scheduler_run(struct scheduler *sch) {
-    int has_perm_pinning;
+    int it_count = 0;
+    int sleep_time = 0;
     struct queue_node *current_task_node;
     struct coroutine *current;
 
-    has_perm_pinning = 0;
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
-        if(has_perm_pinning) {
-            current_task_node = task_list_pop_node(&sch -> local_tasks);
-        } else {
-            current_task_node = task_pool_pop_node(sch -> pool);
-            //printf("Pinning %p to scheduler %p\n", current, sch);
+        if(it_count == 0) {
+            scheduler_try_migrate(sch);
         }
+        it_count++;
+        if(it_count == 50) it_count = 0;
+
+        current_task_node =  queue_try_pop(&sch -> local_tasks.q);
+        if(!current_task_node) {
+            scheduler_try_migrate(sch);
+            current_task_node = queue_try_pop(&sch -> local_tasks.q);
+        }
+        if(!current_task_node) {
+            current_task_node = queue_try_pop(&sch -> pool -> tasks.q);
+        }
+        if(!current_task_node) {
+            if(sleep_time < 10000) {
+                sleep_time += 10;
+            }
+            if(sleep_time >= 1000) {
+                usleep(sleep_time);
+            }
+            continue;
+        }
+
+        sleep_time = 0;
 
         current = queue_node_unwrap(current_task_node);
 
@@ -308,21 +374,7 @@ void scheduler_run(struct scheduler *sch) {
         current_co = current;
         current -> current_scheduler = sch;
         coroutine_run(current);
-        current -> current_scheduler = NULL;
         current_co = NULL;
-
-        if(current -> pinned_scheduler) {
-            assert(current -> pinned_scheduler == sch);
-            /*if(!has_perm_pinning) {
-                printf("Permanent pinning begin\n");
-            }*/
-            has_perm_pinning = 1;
-        } else {
-            /*if(has_perm_pinning) {
-                printf("Permanent pinning end\n");
-            }*/
-            has_perm_pinning = 0;
-        }
 
         if(current -> terminated) {
             coroutine_destroy(current);
@@ -330,7 +382,7 @@ void scheduler_run(struct scheduler *sch) {
         } else if(current -> async_detached) {
             current -> async_target(current, current -> async_user_data);
         } else {
-            task_pool_push_node(sch -> pool, current_task_node);
+            queue_push(&sch -> local_tasks.q, current_task_node);
         }
 
         __atomic_fetch_sub(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);

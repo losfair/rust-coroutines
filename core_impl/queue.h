@@ -104,6 +104,45 @@ static void queue_push(struct queue *q, struct queue_node *node) {
     if(q -> sync) sem_post(&q -> notify);
 }
 
+static struct queue_node * queue_try_take_tail(struct queue *q) {
+    struct queue_node *current;
+    struct queue_node *ret = NULL;
+
+    CRITICAL_ENTER(&q -> lock);
+    current = q -> tail;
+    if(current == q -> head) ret = NULL;
+    else {
+        ret = current;
+        ret -> prev -> next = NULL;
+        q -> tail = ret -> prev;
+        ret -> prev = NULL;
+        q -> n_elements --;
+    }
+    CRITICAL_EXIT(&q -> lock);
+
+    if(ret && q -> sync) sem_wait(&q -> notify);
+    return ret;
+}
+
+static struct queue_node * queue_try_pop(struct queue *q) {
+    struct queue_node *node;
+
+    CRITICAL_ENTER(&q -> lock);
+    node = q -> head -> next;
+    if(node != NULL) {
+        q -> head -> next = node -> next;
+        if(node -> next) node -> next -> prev = q -> head;
+        if(node == q -> tail) q -> tail = q -> head;
+        node -> prev = NULL;
+        node -> next = NULL;
+        q -> n_elements --;
+    }
+    CRITICAL_EXIT(&q -> lock);
+
+    if(node && q -> sync) sem_wait(&q -> notify);
+    return node;
+}
+
 static struct queue_node * queue_pop(struct queue *q) {
     struct queue_node *node;
 
@@ -123,5 +162,8 @@ static struct queue_node * queue_pop(struct queue *q) {
 
     return node;
 }
+
+#undef CRITICAL_ENTER
+#undef CRITICAL_EXIT
 
 #endif
