@@ -314,7 +314,7 @@ static void scheduler_try_migrate(struct scheduler *sch) {
         pool -> perf.max_sched = NULL;
         pool -> perf.max_sched_len = -1;
     }
-    CRITICAL_EXIT(&pool -> lock);
+    CRITICAL_EXIT(&pool -> perf.lock);
 
     if(migration_target) {
         struct queue_node *tail = queue_try_take_tail(&migration_target -> local_tasks.q);
