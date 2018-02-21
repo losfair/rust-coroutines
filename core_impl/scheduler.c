@@ -289,27 +289,17 @@ void scheduler_destroy(struct scheduler *sch) {
 // TODO: Graceful cleanup (?)
 void scheduler_run(struct scheduler *sch) {
     int has_perm_pinning;
-    struct queue_node *current_task_node, *pinned_task_node;
+    struct queue_node *current_task_node;
     struct coroutine *current;
 
-    // There are two kinds of pinning:
-    // 1) Temporary pinning (while a coroutine is being executed)
-    //    indicated by the `pinned` local variable
-    // 2) permanent pinning (specified by `target_crt -> pinned_scheduler`)
-
     has_perm_pinning = 0;
-    pinned_task_node = NULL;
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
-        if(pinned_task_node) {
-            current_task_node = pinned_task_node;
-        } else if(has_perm_pinning) {
+        if(has_perm_pinning) {
             current_task_node = task_list_pop_node(&sch -> local_tasks);
-            pinned_task_node = current_task_node;
         } else {
             current_task_node = task_pool_pop_node(sch -> pool);
-            pinned_task_node = current_task_node;
             //printf("Pinning %p to scheduler %p\n", current, sch);
         }
 
@@ -341,12 +331,10 @@ void scheduler_run(struct scheduler *sch) {
         if(current -> terminated) {
             coroutine_destroy(current);
             free(current_task_node);
-            pinned_task_node = NULL;
         } else if(current -> async_detached) {
-            pinned_task_node = NULL;
             current -> async_target(current, current -> async_user_data);
         } else {
-            //task_pool_push_node(sch -> pool, current);
+            task_pool_push_node(sch -> pool, current_task_node);
         }
 
         __atomic_fetch_sub(&sch -> pool -> n_busy_schedulers, 1, __ATOMIC_RELAXED);

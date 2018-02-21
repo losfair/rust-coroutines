@@ -5,13 +5,15 @@
 #include <string.h>
 #include <pthread.h>
 
-#ifdef HAS_TM
-#define CRITICAL_ENTER(lock) __transaction_atomic {
-#define CRITICAL_EXIT(lock) }
-#else
+// STM doesn't provide real benefit here...
+
+//#ifdef HAS_TM
+//#define CRITICAL_ENTER(lock) __transaction_atomic {
+//#define CRITICAL_EXIT(lock) }
+//#else
 #define CRITICAL_ENTER(lock) pthread_spin_lock(lock)
 #define CRITICAL_EXIT(lock) pthread_spin_unlock(lock)
-#endif
+//#endif
 
 struct queue;
 struct queue_node;
@@ -23,9 +25,7 @@ struct queue {
     int n_elements;
     int sync; // (sync && notify.initialized) || (!sync && !notify.initialized)
     sem_t notify;
-#ifndef HAS_TM
     pthread_spinlock_t lock;
-#endif
 };
 
 struct queue_node {
@@ -59,9 +59,7 @@ static void queue_init(struct queue *q, int element_size, int sync) {
     q -> sync = sync;
 
     if(sync) sem_init(&q -> notify, 0, 0);
-#ifndef HAS_TM
     pthread_spin_init(&q -> lock, 0);
-#endif
 
     queue_node_init(q -> head, q);
 }
@@ -84,9 +82,7 @@ static void queue_destroy(struct queue *q, void (*destructor)(struct queue_node 
     q -> tail = NULL;
 
     if(q -> sync) sem_destroy(&q -> notify);
-#ifndef HAS_TM
     pthread_spin_destroy(&q -> lock);
-#endif
 }
 
 static int queue_len(struct queue *q) {
