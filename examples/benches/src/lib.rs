@@ -4,14 +4,28 @@ extern crate coroutines;
 
 use test::Bencher;
 
-#[test]
-fn test_mpsc() {
-    let (tx, rx) = ::std::sync::mpsc::channel();
-    coroutines::spawn(move || {
-        tx.send(42).unwrap();
+#[bench]
+fn mpsc_co_native(b: &mut Bencher) {
+    b.iter(|| {
+        let (tx, rx) = ::std::sync::mpsc::channel();
+        coroutines::spawn(move || {
+            tx.send(42).unwrap();
+        });
+        let v: i32 = rx.recv().unwrap();
+        assert!(v == 42);
     });
-    let v: i32 = rx.recv().unwrap();
-    assert!(v == 42);
+}
+
+#[bench]
+fn mpsc_native_thread(b: &mut Bencher) {
+    b.iter(|| {
+        let (tx, rx) = ::std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(42).unwrap();
+        });
+        let v: i32 = rx.recv().unwrap();
+        assert!(v == 42);
+    });
 }
 
 #[bench]
@@ -22,6 +36,11 @@ fn simple_yield(b: &mut Bencher) {
     coroutines::spawn(move || {
         b.iter(|| coroutines::yield_now());
     }).join().unwrap();
+}
+
+#[bench]
+fn native_thread_spawn(b: &mut Bencher) {
+    b.iter(|| std::thread::spawn(|| {}));
 }
 
 #[bench]
