@@ -4,6 +4,16 @@ extern crate coroutines;
 
 use test::Bencher;
 
+#[test]
+fn test_mpsc() {
+    let (tx, rx) = ::std::sync::mpsc::channel();
+    coroutines::spawn(move || {
+        tx.send(42).unwrap();
+    });
+    let v: i32 = rx.recv().unwrap();
+    assert!(v == 42);
+}
+
 #[bench]
 fn simple_yield(b: &mut Bencher) {
     let b = unsafe {
