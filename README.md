@@ -19,11 +19,11 @@ rust-coroutines includes a separate runtime library which provides coroutine sch
 
 ## Build and use
 
-The runtime library includes a lot of platform-specific code and writing it in Rust won't provide much benefit. Therefore, I decide to write it in C. Before using the library, you need to build (and optionally 'install') `core_impl/unblock_hook` first (clang required):
+The runtime library includes a lot of platform-specific code and writing it in Rust won't provide much benefit. Therefore, I decide to write it in C. Before using the library, you need to build (and optionally 'install') `core_impl/unblock_hook` first (A modern C compiler is required):
 
 ```
 cd core_impl
-make
+make unblock_hook
 sudo cp libunblock_hook.so /usr/lib/ # Optional (see below)
 ```
 
