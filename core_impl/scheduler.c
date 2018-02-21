@@ -61,16 +61,13 @@ static void coroutine_target_init(void *raw_crt) {
 
 void coroutine_init(
     struct coroutine *crt,
-    size_t stack_size,
     struct task_pool *pool,
     coroutine_entry entry,
     void *user_data
 ) {
     int i;
 
-    crt -> stack_begin = (char *) malloc(stack_size);
-    crt -> stack_end = crt -> stack_begin + stack_size;
-    crt -> local_rsp = (long) crt -> stack_end;
+    crt -> local_rsp = (long) crt -> stack + pool -> stack_size;
     crt -> caller_rsp = 0;
     crt -> initialized = 0;
     crt -> terminated = 0;
@@ -104,8 +101,6 @@ void coroutine_init(
     crt -> entry = entry;
     crt -> user_data = user_data;
 
-    crt -> prev = NULL;
-    crt -> next = NULL;
 }
 
 void coroutine_destroy(
@@ -114,9 +109,6 @@ void coroutine_destroy(
     int i;
     cls_destructor dtor;
 
-    if(crt -> stack_begin != NULL) {
-        free(crt -> stack_begin);
-    }
     if(crt -> cls.slots != NULL) {
         assert(crt -> cls.n_slots > 0);
         for(i = 0; i < crt -> cls.n_slots; i++) {
@@ -183,8 +175,11 @@ void task_list_destroy(struct task_list *list) {
     queue_destroy(&list -> q, _task_list_destroy_node_cb);
 }
 
-void task_pool_init(struct task_pool *pool, int concurrent) {
+void task_pool_init(struct task_pool *pool, int stack_size, int concurrent) {
     task_list_init(&pool -> tasks, concurrent);
+    resource_pool_init(&pool -> coroutine_pool, sizeof(struct coroutine) + stack_size);
+
+    pool -> stack_size = stack_size;
 
     pool -> n_cls_slots = 0;
     pool -> n_schedulers = 0;
@@ -196,6 +191,7 @@ void task_pool_init(struct task_pool *pool, int concurrent) {
 
 void task_pool_destroy(struct task_pool *pool) {
     task_list_destroy(&pool -> tasks);
+    resource_pool_destroy(&pool -> coroutine_pool);
 
     dyn_array_destroy(&pool -> cls_destructors);
     pthread_mutex_destroy(&pool -> cls_destructors_lock);
@@ -330,7 +326,7 @@ void scheduler_run(struct scheduler *sch) {
 
         if(current -> terminated) {
             coroutine_destroy(current);
-            free(current_task_node);
+            resource_pool_return(&sch -> pool -> coroutine_pool, current_task_node);
         } else if(current -> async_detached) {
             current -> async_target(current, current -> async_user_data);
         } else {
@@ -343,13 +339,12 @@ void scheduler_run(struct scheduler *sch) {
 
 void start_coroutine(
     struct task_pool *pool,
-    size_t stack_size,
     coroutine_entry entry,
     void *user_data
 ) {
-    struct queue_node *node = malloc(sizeof(struct queue_node) + sizeof(struct coroutine));
+    struct queue_node *node = resource_pool_take(&pool -> coroutine_pool);
     queue_node_init(node, &pool -> tasks.q);
-    coroutine_init(queue_node_unwrap(node), stack_size, pool, entry, user_data);
+    coroutine_init(queue_node_unwrap(node), pool, entry, user_data);
     task_pool_push_node(pool, node);
 }
 

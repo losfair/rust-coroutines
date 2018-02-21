@@ -6,6 +6,7 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include "queue.h"
+#include "pool.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,8 +35,6 @@ struct coroutine_local_storage {
 };
 
 struct coroutine {
-    char *stack_begin;
-    char *stack_end;
     long local_rsp;
     long caller_rsp;
     int initialized;
@@ -59,8 +58,7 @@ struct coroutine {
     coroutine_entry entry;
     void *user_data;
 
-    struct coroutine *prev;
-    struct coroutine *next;
+    char stack[];
 };
 
 void coroutine_yield(
@@ -69,7 +67,6 @@ void coroutine_yield(
 
 void coroutine_init(
     struct coroutine *crt,
-    size_t stack_size,
     struct task_pool *pool,
     coroutine_entry entry,
     void *user_data
@@ -100,6 +97,9 @@ void coroutine_dec_n_pin_reasons(
 
 struct task_pool {
     struct task_list tasks;
+    struct resource_pool coroutine_pool;
+
+    int stack_size;
 
     int n_cls_slots;
     int n_schedulers;
@@ -109,14 +109,14 @@ struct task_pool {
     pthread_mutex_t cls_destructors_lock;
 };
 
-void task_list_init(struct task_list *list, int _concurrent /* unused */);
+void task_list_init(struct task_list *list, int concurrent);
 void task_list_destroy(struct task_list *list);
 void task_list_debug_print(struct task_list *list);
 void task_list_push_node(struct task_list *list, struct queue_node *node);
 struct queue_node * task_list_pop_node(struct task_list *list);
 int task_list_is_empty(struct task_list *list);
 
-void task_pool_init(struct task_pool *pool, int concurrent);
+void task_pool_init(struct task_pool *pool, int stack_size, int concurrent);
 void task_pool_destroy(struct task_pool *pool);
 void task_pool_push_node(struct task_pool *pool, struct queue_node *node);
 struct queue_node * task_pool_pop_node(struct task_pool *pool);
@@ -137,7 +137,6 @@ void scheduler_run(struct scheduler *sch);
 
 void start_coroutine(
     struct task_pool *pool,
-    size_t stack_size,
     coroutine_entry entry,
     void *user_data
 );

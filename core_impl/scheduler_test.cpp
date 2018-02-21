@@ -127,7 +127,7 @@ void nested_co(struct coroutine *crt) {
     ctx.target_value = 10000;
 
     for(int i = 0; i < ctx.target_value; i++) {
-        start_coroutine(crt -> pool, 4096, _nested_co_inner, (void *) &ctx);
+        start_coroutine(crt -> pool, _nested_co_inner, (void *) &ctx);
     }
 
     ctx.notify.wait();
@@ -139,15 +139,15 @@ void nested_co(struct coroutine *crt) {
 
 int main() {
     struct task_pool pool;
-    task_pool_init(&pool, 1);
+    task_pool_init(&pool, 4096, 1);
 
-    start_coroutine(&pool, 4096, crt1_fn, NULL);
-    start_coroutine(&pool, 4096, crt2_fn, NULL);
-    start_coroutine(&pool, 4096, fib_n, (void *) 37);
-    start_coroutine(&pool, 4096, fib_n, (void *) 32);
-    start_coroutine(&pool, 4096, fib_n, (void *) 27);
-    start_coroutine(&pool, 4096, async_calls, NULL);
-    start_coroutine(&pool, 4096, nested_co, NULL);
+    start_coroutine(&pool, crt1_fn, NULL);
+    start_coroutine(&pool, crt2_fn, NULL);
+    start_coroutine(&pool, fib_n, (void *) 37);
+    start_coroutine(&pool, fib_n, (void *) 32);
+    start_coroutine(&pool, fib_n, (void *) 27);
+    start_coroutine(&pool, async_calls, NULL);
+    start_coroutine(&pool, nested_co, NULL);
 
     for(int i = 0; i < 4; i++) {
         std::thread([&pool]() {

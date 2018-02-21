@@ -192,7 +192,7 @@ static void __attribute__((constructor)) __init() {
     realFpthread_rwlock_timedrdlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedrdlock");
     realFpthread_rwlock_timedwrlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedwrlock");
 
-    task_pool_init(&global_pool, 1);
+    task_pool_init(&global_pool, 4096 * 16, 1);
     num_cpus = get_nprocs();
     for(i = 0; i < num_cpus; i++) {
         _start_scheduler();
@@ -609,7 +609,7 @@ void launch_co(
     global_initialized = 1;
 
     // Lazy page allocation?
-    start_coroutine(&global_pool, 4096 * 16, entry, user_data);
+    start_coroutine(&global_pool, entry, user_data);
 }
 
 void * extract_co_user_data(
