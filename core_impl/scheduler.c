@@ -354,7 +354,7 @@ void scheduler_run(struct scheduler *sch) {
             current_task_node = queue_try_pop(&sch -> pool -> tasks.q);
         }
         if(!current_task_node) {
-            if(sleep_time < 10000) {
+            if(sleep_time < 50000) {
                 sleep_time += 10;
             }
             if(sleep_time >= 1000) {
