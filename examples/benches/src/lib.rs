@@ -3,6 +3,51 @@ extern crate test;
 extern crate coroutines;
 
 use test::Bencher;
+use coroutines::Promise;
+
+#[bench]
+fn async_enter(b: &mut Bencher) {
+    let b = unsafe {
+        std::mem::transmute::<&mut Bencher, &'static mut Bencher>(b)
+    };
+    coroutines::spawn(move || {
+        b.iter(|| {
+            let ret = Promise::await(|p| p.resolve(42));
+            assert!(ret == 42);
+        })
+    }).join().unwrap();
+}
+
+#[bench]
+fn async_enter_holding_mutex(b: &mut Bencher) {
+    let b = unsafe {
+        std::mem::transmute::<&mut Bencher, &'static mut Bencher>(b)
+    };
+    coroutines::spawn(move || {
+        b.iter(|| {
+            let m = ::std::sync::Mutex::new(());
+            let _handle = m.lock().unwrap();
+            let ret = Promise::await(|p| p.resolve(42));
+            assert!(ret == 42);
+        })
+    }).join().unwrap();
+}
+
+#[bench]
+fn async_enter_dropped_mutex(b: &mut Bencher) {
+    let b = unsafe {
+        std::mem::transmute::<&mut Bencher, &'static mut Bencher>(b)
+    };
+    coroutines::spawn(move || {
+        b.iter(|| {
+            let m = ::std::sync::Mutex::new(());
+            let _handle = m.lock().unwrap();
+            drop(_handle);
+            let ret = Promise::await(|p| p.resolve(42));
+            assert!(ret == 42);
+        })
+    }).join().unwrap();
+}
 
 #[bench]
 fn mpsc_co_native(b: &mut Bencher) {
