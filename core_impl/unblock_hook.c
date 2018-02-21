@@ -208,6 +208,7 @@ static void __attribute__((constructor)) __init() {
 struct poll_fd_request {
     int fd;
     int mode;
+    struct co_poll_context _ctx_impl;
 };
 
 static void enter_poll_fd(struct coroutine *co, void *raw_req) {
@@ -215,7 +216,7 @@ static void enter_poll_fd(struct coroutine *co, void *raw_req) {
     struct epoll_event ev;
     struct poll_fd_request *req = raw_req;
 
-    struct co_poll_context *pc = malloc(sizeof(struct co_poll_context));
+    struct co_poll_context *pc = &req -> _ctx_impl;
     pc -> co = co;
 
     ev.events = req -> mode | EPOLLET | EPOLLONESHOT;
@@ -238,7 +239,6 @@ int nanosleep(
     int tfd;
     struct itimerspec ts;
     struct poll_fd_request poll_req;
-    struct co_poll_context *ctx;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -260,8 +260,7 @@ int nanosleep(
     poll_req.fd = tfd;
     poll_req.mode = EPOLLIN;
 
-    ctx = coroutine_async_enter(co, enter_poll_fd, &poll_req);
-    free(ctx);
+    coroutine_async_enter(co, enter_poll_fd, &poll_req);
 
     assert(epoll_ctl(
         epoll_fd,
@@ -300,7 +299,6 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
     int status;
     int socket_flags;
     struct poll_fd_request poll_req;
-    struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -325,8 +323,7 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
             return status;
         }
 
-        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
-        free(pc);
+        coroutine_async_enter(co, enter_poll_fd, &poll_req);
 
         assert(epoll_ctl(
             epoll_fd,
@@ -356,7 +353,6 @@ ssize_t sendto(
     struct coroutine *co;
     ssize_t status;
     struct poll_fd_request poll_req;
-    struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -372,8 +368,7 @@ ssize_t sendto(
             return status;
         }
 
-        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
-        free(pc);
+        coroutine_async_enter(co, enter_poll_fd, &poll_req);
 
         assert(epoll_ctl(
             epoll_fd,
@@ -408,7 +403,6 @@ ssize_t recvfrom(
     struct coroutine *co;
     ssize_t status;
     struct poll_fd_request poll_req;
-    struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -424,8 +418,7 @@ ssize_t recvfrom(
             return status;
         }
 
-        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
-        free(pc);
+        coroutine_async_enter(co, enter_poll_fd, &poll_req);
 
         assert(epoll_ctl(
             epoll_fd,
@@ -445,7 +438,6 @@ int connect(int socket, const struct sockaddr *address, socklen_t address_len) {
     int status;
     int socket_flags;
     struct poll_fd_request poll_req;
-    struct co_poll_context *pc;
 
     co = current_coroutine();
     if(co == NULL) {
@@ -468,8 +460,7 @@ int connect(int socket, const struct sockaddr *address, socklen_t address_len) {
             return status;
         }
 
-        pc = coroutine_async_enter(co, enter_poll_fd, &poll_req);
-        free(pc);
+        coroutine_async_enter(co, enter_poll_fd, &poll_req);
 
         assert(epoll_ctl(
             epoll_fd,
