@@ -7,6 +7,8 @@ Replace `std::thread::spawn` with `coroutines::spawn` and that's all. Everything
 [![Crates.io](https://img.shields.io/crates/v/coroutines.svg)](https://crates.io/crates/coroutines)
 [![Build Status](https://travis-ci.org/losfair/rust-coroutines.svg?branch=master)](https://travis-ci.org/losfair/rust-coroutines)
 
+[Documentation](https://docs.rs/coroutines)
+
 ## Features
 
 - Most `libstd` functions that was blocking get patched and become asynchronous automatically
@@ -74,10 +76,7 @@ fn start() {
 }
 
 fn main() {
-    coroutines::spawn(start);
-    loop {
-        std::thread::sleep_ms(3600000);
-    }
+    coroutines::spawn(start).join().unwrap();
 }
 ```
 
@@ -121,8 +120,12 @@ test threads_cpus                 ... bench:  40,202,798 ns/iter (+/- 6,837,590)
 test threads_many                 ... bench:  40,259,324 ns/iter (+/- 864,916,488)
 ```
 
+## Work stealing
+
+Migrating coroutines to another OS thread is safe in most cases, but not if the user code makes use of something related to the current thread - or more generally, not `Send`. Thread Local Storage, for example. Therefore, migration of coroutines ("work stealing") is disabled by default and requires manual configuration to turn on.
+
 ## Known issues
 
-- Entering asynchronous operations while holding a Mutex or RwLock on the current coroutine is currently a very expensive operation because the current coroutine has to be pinned to an execution unit and cannot yield out while waiting for the lock to be available. However, doing I/O while holding a lock is a slow operation itself so performance penalty with coroutine pinning / blocking wait will not be noticed most of the time.
-- Thread local storage (TLS) is not yet patched and might be dangerous to use across an async_enter/exit boundary. It needs some work to figure out how to do the hookings correctly.
+- Synchronization primitives are not patched yet and will block the current execution unit while waiting for something to be available (e.g. locks & conditional variables). The runtime will spin up a new executor if it detects that there is no executor available for a period of time, but the workaround takes more time and system resources than a set of properly implemented asynchronous replacements.
+- Thread local storage (TLS) is not yet patched and might produce unexpected results while used in coroutines (not violating Rust's safety rules with safe user code & work stealing disabled, though).
 - Only x86-64 Linux is supported at the moment. Porting to other Unix-like systems and i386 & ARM architectures is planned.
