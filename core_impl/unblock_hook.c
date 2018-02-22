@@ -194,14 +194,16 @@ static void __attribute__((constructor)) __init() {
 
     task_pool_init(&global_pool, 4096 * 16, 1);
     num_cpus = get_nprocs();
-    for(i = 0; i < num_cpus; i++) {
+    for(i = 0; i < num_cpus * 5 / 4; i++) {
         _start_scheduler();
     }
 
     epoll_fd = epoll_create(1);
     assert(epoll_fd >= 0);
 
-    realFpthread_create(&tinfo, NULL, _do_poll, NULL);
+    for(i = 0; i < num_cpus / 2 + 1; i++) {
+        realFpthread_create(&tinfo, NULL, _do_poll, NULL);
+    }
     realFpthread_create(&tinfo, NULL, _monitor_available_schedulers, NULL);
 }
 
