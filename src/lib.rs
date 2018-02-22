@@ -35,6 +35,10 @@ extern "C" {
         co: *const CoroutineImpl
     );
 
+    fn gtp_enable_work_stealing();
+    fn gtp_disable_work_stealing();
+    fn gtp_get_migration_count() -> i32;
+
     pub(crate) fn coroutine_async_enter(
         co: *const CoroutineImpl,
         entry: AsyncEntry,
@@ -173,6 +177,20 @@ pub fn yield_now() {
 pub fn global_event_count() -> usize {
     unsafe {
         co_get_global_event_count()
+    }
+}
+
+pub unsafe fn set_work_stealing(enabled: bool) {
+    if enabled {
+        gtp_enable_work_stealing();
+    } else {
+        gtp_disable_work_stealing();
+    }
+}
+
+pub fn migration_count() -> usize {
+    unsafe {
+        gtp_get_migration_count() as usize
     }
 }
 

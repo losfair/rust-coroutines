@@ -116,6 +116,8 @@ struct task_pool {
 
     struct perf_info perf;
 
+    int migration_count; // atomic
+
     int disable_work_stealing;
     int n_cls_slots;
     int n_schedulers;

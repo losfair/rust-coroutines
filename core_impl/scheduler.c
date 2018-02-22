@@ -190,7 +190,10 @@ void task_pool_init(struct task_pool *pool, int stack_size, int concurrent) {
 
     pthread_spin_init(&pool -> perf.lock, 0);
 
-    pool -> disable_work_stealing = 0;
+    pool -> migration_count = 0;
+
+    // work-stealing is not safe for Rust (non-Send types).
+    pool -> disable_work_stealing = 1;
 
     pool -> n_cls_slots = 0;
     pool -> n_schedulers = 0;
@@ -324,6 +327,7 @@ static void scheduler_try_migrate(struct scheduler *sch) {
             struct coroutine *tail_co = queue_node_unwrap(tail);
             if(tail_co -> migratable) {
                 queue_push(&sch -> local_tasks.q, tail);
+                __atomic_fetch_add(&pool -> migration_count, 1, __ATOMIC_RELAXED);
             } else {
                 queue_push(&migration_target -> local_tasks.q, tail);
             }
@@ -337,18 +341,19 @@ void scheduler_run(struct scheduler *sch) {
     int sleep_time = 0;
     struct queue_node *current_task_node;
     struct coroutine *current;
-    int disable_work_stealing = sch -> pool -> disable_work_stealing;
 
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
-        if(!disable_work_stealing) {
-            if(it_count == 0) {
-                scheduler_try_migrate(sch);
-            }
-            it_count++;
-            if(it_count == 50) it_count = 0;
+        int disable_work_stealing = __atomic_load_n(
+            &sch -> pool -> disable_work_stealing,
+            __ATOMIC_RELAXED
+        );
+        if(it_count == 0 && !disable_work_stealing) {
+            scheduler_try_migrate(sch);
         }
+        it_count++;
+        if(it_count == 50) it_count = 0;
 
         current_task_node =  queue_try_pop(&sch -> local_tasks.q);
         if(!disable_work_stealing) {

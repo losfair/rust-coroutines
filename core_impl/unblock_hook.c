@@ -193,7 +193,6 @@ static void __attribute__((constructor)) __init() {
     realFpthread_rwlock_timedwrlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedwrlock");
 
     task_pool_init(&global_pool, 4096 * 16, 1);
-    //global_pool.disable_work_stealing = 1;
 
     num_cpus = get_nprocs();
     for(i = 0; i < num_cpus * 5 / 4; i++) {
@@ -615,4 +614,27 @@ void * extract_co_user_data(
 
 unsigned long co_get_global_event_count() {
     return __atomic_load_n(&event_count, __ATOMIC_RELAXED);
+}
+
+void gtp_enable_work_stealing() {
+    __atomic_store_n(
+        &global_pool.disable_work_stealing,
+        0,
+        __ATOMIC_RELAXED
+    );
+}
+
+void gtp_disable_work_stealing() {
+    __atomic_store_n(
+        &global_pool.disable_work_stealing,
+        1,
+        __ATOMIC_RELAXED
+    );
+}
+
+int gtp_get_migration_count() {
+    return __atomic_load_n(
+        &global_pool.migration_count,
+        __ATOMIC_RELAXED
+    );
 }
