@@ -5,6 +5,11 @@ authors = ["losfair <zhy20000919@hotmail.com>"]
 description = "High performance coroutine library with native experience"
 license = "LGPL-3.0"
 repository = "https://github.com/losfair/rust-coroutines"
+readme = "README.md"
+keywords = ["coroutines", "coroutine", "concurrent", "concurrency", "parallel", "async", "server", "io", "event", "loop"]
+
+[badges]
+travis-ci = { repository = "losfair/rust-coroutines" }
 
 [dependencies]
 
