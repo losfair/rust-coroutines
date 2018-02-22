@@ -1,6 +1,7 @@
 use super::{CoroutineImpl, AnyUserData};
 use super::{coroutine_async_enter, coroutine_async_exit, current_coroutine};
 
+/// A representation of a "suspended" coroutine.
 pub struct Promise<T: Send + 'static> {
     co: *const CoroutineImpl,
     resolved: bool,
@@ -22,6 +23,16 @@ impl<T: Send + 'static> Promise<T> {
         entry(promise);
     }
 
+    /// Suspends the execution of the current coroutine,
+    /// calls the provided function with a `Promise` representing
+    /// the current coroutine, and waits until the `Promise` gets
+    /// resolved.
+    ///
+    /// If the `Promise` is dropped before resolving, `Drop`
+    /// will panic and the coroutine will leak.
+    ///
+    /// If called outside of a coroutine, the current thread
+    /// will be suspended instead.
     pub fn await<F: FnOnce(Promise<T>) + Send + 'static>(f: F) -> T {
         let co = unsafe { current_coroutine() };
         if co.is_null() {
@@ -59,6 +70,7 @@ impl<T: Send + 'static> Promise<T> {
         ::std::mem::replace(&mut p.result, None).unwrap()
     }
 
+    /// Resolves a `Promise` with the provided `result`.
     pub fn resolve(mut self, result: T) {
         self.result = Some(result);
 

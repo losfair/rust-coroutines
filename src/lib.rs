@@ -90,6 +90,7 @@ fn spawn_with_callback<
     }
 }
 
+/// A handle used to wait on a coroutine's termination.
 pub struct JoinHandle<T: Send + 'static> {
     state: Arc<spin::Mutex<JoinHandleState<T>>>
 }
@@ -101,6 +102,15 @@ impl<T: Send + 'static> JoinHandle<T> {
         }
     }
 
+    /// Waits for the associated coroutine to finish.
+    ///
+    /// If the associated coroutine has already terminated,
+    /// `join` returns instantly with the result.
+    /// Otherwise, `join` waits until the coroutine terminates.
+    ///
+    /// If the child coroutine panics, `Err` is returned with the
+    /// boxed value passed to `panic`. Otherwise, `Ok` is returned
+    /// with the return value of the closure executed in the coroutine.
     pub fn join(self) -> Result<T, Box<Any + Send>> {
         Promise::await(move |p| {
             let mut state = self.state.lock();
@@ -125,10 +135,14 @@ enum JoinHandleState<T: Send + 'static> {
     Pending(Promise<Result<T, Box<Any + Send>>>)
 }
 
+/// Spawns a coroutine without building a `JoinHandle`.
+///
+/// This may be faster than `spawn` in some cases.
 pub fn fast_spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) {
     spawn_with_callback(entry, |_| {});
 }
 
+/// Spawns a coroutine and returns its `JoinHandle`.
 pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) -> JoinHandle<T> {
     let handle = JoinHandle {
         state: Arc::new(spin::Mutex::new(JoinHandleState::Empty as JoinHandleState<T>))
@@ -157,6 +171,10 @@ pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) -> 
     handle
 }
 
+/// Deprecated.
+///
+/// Spawns another coroutine if called inside a coroutine,
+/// or an OS thread otherwise.
 pub fn spawn_inherit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry: F) {
     if unsafe { current_coroutine() }.is_null() {
         ::std::thread::spawn(entry);
@@ -165,6 +183,8 @@ pub fn spawn_inherit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(entry
     }
 }
 
+/// Yields out of the current coroutine and allows the scheduler
+/// to execute other coroutines.
 pub fn yield_now() {
     let co = unsafe { current_coroutine() };
     if !co.is_null() {
@@ -174,12 +194,18 @@ pub fn yield_now() {
     }
 }
 
+/// Returns the global event count.
 pub fn global_event_count() -> usize {
     unsafe {
         co_get_global_event_count()
     }
 }
 
+/// Enable / disable coroutine migration ("work stealing")
+/// globally. (disabled by default)
+///
+/// This should be used with care because migrating values of
+/// non-Send types might break Rust's safety guarantee.
 pub unsafe fn set_work_stealing(enabled: bool) {
     if enabled {
         gtp_enable_work_stealing();
@@ -188,6 +214,7 @@ pub unsafe fn set_work_stealing(enabled: bool) {
     }
 }
 
+/// Returns the current global migration count.
 pub fn migration_count() -> usize {
     unsafe {
         gtp_get_migration_count() as usize
