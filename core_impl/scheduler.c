@@ -190,6 +190,8 @@ void task_pool_init(struct task_pool *pool, int stack_size, int concurrent) {
 
     pthread_spin_init(&pool -> perf.lock, 0);
 
+    pool -> disable_work_stealing = 0;
+
     pool -> n_cls_slots = 0;
     pool -> n_schedulers = 0;
     pool -> n_busy_schedulers = 0;
@@ -335,20 +337,25 @@ void scheduler_run(struct scheduler *sch) {
     int sleep_time = 0;
     struct queue_node *current_task_node;
     struct coroutine *current;
+    int disable_work_stealing = sch -> pool -> disable_work_stealing;
 
     assert(current_co == NULL); // nested schedulers are not allowed
 
     while(1) {
-        if(it_count == 0) {
-            scheduler_try_migrate(sch);
+        if(!disable_work_stealing) {
+            if(it_count == 0) {
+                scheduler_try_migrate(sch);
+            }
+            it_count++;
+            if(it_count == 50) it_count = 0;
         }
-        it_count++;
-        if(it_count == 50) it_count = 0;
 
         current_task_node =  queue_try_pop(&sch -> local_tasks.q);
-        if(!current_task_node) {
-            scheduler_try_migrate(sch);
-            current_task_node = queue_try_pop(&sch -> local_tasks.q);
+        if(!disable_work_stealing) {
+            if(!current_task_node) {
+                scheduler_try_migrate(sch);
+                current_task_node = queue_try_pop(&sch -> local_tasks.q);
+            }
         }
         if(!current_task_node) {
             current_task_node = queue_try_pop(&sch -> pool -> tasks.q);

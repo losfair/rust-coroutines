@@ -193,6 +193,8 @@ static void __attribute__((constructor)) __init() {
     realFpthread_rwlock_timedwrlock = dlsym(RTLD_NEXT, "pthread_rwlock_timedwrlock");
 
     task_pool_init(&global_pool, 4096 * 16, 1);
+    //global_pool.disable_work_stealing = 1;
+
     num_cpus = get_nprocs();
     for(i = 0; i < num_cpus * 5 / 4; i++) {
         _start_scheduler();
