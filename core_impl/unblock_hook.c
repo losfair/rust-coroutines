@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include "scheduler.h"
 
+#define VERSION 20
+
 #define MAX_N_EPOLL_EVENTS 16
 
 static struct task_pool global_pool;
@@ -637,4 +639,8 @@ int gtp_get_migration_count() {
         &global_pool.migration_count,
         __ATOMIC_RELAXED
     );
+}
+
+int ubh_get_version() {
+    return VERSION;
 }

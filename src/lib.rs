@@ -19,6 +19,8 @@ pub(crate) struct AnyUserData {
 
 pub(crate) type AsyncEntry = extern "C" fn (co: *const CoroutineImpl, data: *const AnyUserData);
 
+const REQUIRED_BACKEND_VERSION: i32 = 20;
+
 #[link(name = "unblock_hook", kind = "dylib")]
 extern "C" {
     pub(crate) fn current_coroutine() -> *const CoroutineImpl;
@@ -38,6 +40,8 @@ extern "C" {
     fn gtp_enable_work_stealing();
     fn gtp_disable_work_stealing();
     fn gtp_get_migration_count() -> i32;
+
+    fn ubh_get_version() -> i32;
 
     pub(crate) fn coroutine_async_enter(
         co: *const CoroutineImpl,
@@ -78,6 +82,11 @@ fn spawn_with_callback<
     F: FnOnce() -> T + Send + 'static,
     E: FnOnce(Result<T, Box<Any + Send>>) + Send + 'static
 >(entry: F, cb: E) {
+    let real_version = unsafe { ubh_get_version() };
+    if real_version != REQUIRED_BACKEND_VERSION {
+        panic!("Backend version mismatch (expected: {}, got: {})", REQUIRED_BACKEND_VERSION, real_version);
+    }
+
     let co = Box::new(CoroutineEntry {
         entry: Some(entry),
         on_exit: Some(cb)
