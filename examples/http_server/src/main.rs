@@ -70,11 +70,19 @@ fn run() {
 }
 
 fn main() {
+    unsafe {
+        coroutines::set_work_stealing(true);
+    }
+
     coroutines::spawn(run);
     //std::thread::spawn(run);
 
     loop {
         ::std::thread::sleep(Duration::from_secs(5));
-        println!("Global event count: {}", coroutines::global_event_count());
+        println!(
+            "Global event count: {} Migration count: {}",
+            coroutines::global_event_count(),
+            coroutines::migration_count()
+        );
     }
 }

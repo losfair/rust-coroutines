@@ -131,13 +131,11 @@ void task_list_init(struct task_list *list, int concurrent);
 void task_list_destroy(struct task_list *list);
 void task_list_debug_print(struct task_list *list);
 void task_list_push_node(struct task_list *list, struct queue_node *node);
-struct queue_node * task_list_pop_node(struct task_list *list);
 int task_list_is_empty(struct task_list *list);
 
 void task_pool_init(struct task_pool *pool, int stack_size, int concurrent);
 void task_pool_destroy(struct task_pool *pool);
 void task_pool_push_node(struct task_pool *pool, struct queue_node *node);
-struct queue_node * task_pool_pop_node(struct task_pool *pool);
 int task_pool_get_n_cls_slots(struct task_pool *pool);
 int task_pool_add_cls_slot(struct task_pool *pool, cls_destructor dtor);
 int task_pool_get_and_reset_n_period_sched_status_updates(struct task_pool *pool);

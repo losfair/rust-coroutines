@@ -204,7 +204,7 @@ static void __attribute__((constructor)) __init() {
     epoll_fd = epoll_create(1);
     assert(epoll_fd >= 0);
 
-    for(i = 0; i < num_cpus / 2 + 1; i++) {
+    for(i = 0; i < num_cpus / 2 + 2; i++) {
         realFpthread_create(&tinfo, NULL, _do_poll, NULL);
     }
     realFpthread_create(&tinfo, NULL, _monitor_available_schedulers, NULL);

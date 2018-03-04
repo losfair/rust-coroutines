@@ -164,7 +164,7 @@ void coroutine_dec_n_pin_reasons(
 }
 
 void task_list_init(struct task_list *list, int _concurrent /* unused */) {
-    queue_init(&list -> q, sizeof(struct coroutine), 1);
+    queue_init(&list -> q, sizeof(struct coroutine), 0);
 }
 
 static void _task_list_destroy_node_cb(struct queue_node *node) {
@@ -249,16 +249,8 @@ int task_list_is_empty(struct task_list *list) {
     return queue_len(&list -> q) == 0;
 }
 
-struct queue_node * task_list_pop_node(struct task_list *list) {
-    return queue_pop(&list -> q);
-}
-
 void task_pool_push_node(struct task_pool *pool, struct queue_node *node) {
     task_list_push_node(&pool -> tasks, node);
-}
-
-struct queue_node * task_pool_pop_node(struct task_pool *pool) {
-    return task_list_pop_node(&pool -> tasks);
 }
 
 int task_pool_get_n_cls_slots(struct task_pool *pool) {
@@ -353,7 +345,7 @@ void scheduler_run(struct scheduler *sch) {
             scheduler_try_migrate(sch);
         }
         it_count++;
-        if(it_count == 50) it_count = 0;
+        if(it_count == 80) it_count = 0;
 
         current_task_node =  queue_try_pop(&sch -> local_tasks.q);
         if(!disable_work_stealing) {
